@@ -1,0 +1,21 @@
+services:
+  - class: org.yamcs.http.HttpServer
+    args:
+      port: 8090
+      address: "0.0.0.0"
+      cors:
+        allowOrigin: "*"
+        allowCredentials: false
+
+dataDir: /yamcs-data
+cacheDir: /yamcs-cache
+serverId: proves-central
+
+instances:
+  - fprime-project
+
+secretKey: "@YAMCS_SECRET_KEY@"
+
+yamcs-web:
+  tag: PROVES
+

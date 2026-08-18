@@ -1,0 +1,23 @@
+name: proves-yamcs
+
+services:
+  yamcs:
+    image: proves-yamcs:5.12.8
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    restart: unless-stopped
+    user: "${YAMCS_UID:-1000}:${YAMCS_GID:-1000}"
+    ports:
+      - "8090:8090"
+      - "50000:50000/udp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./runtime/config:/yamcs-config:ro
+      - ./runtime/data:/yamcs-data
+      - ./runtime/cache:/yamcs-cache
+    read_only: true
+    tmpfs:
+      - /tmp:rw,exec,nosuid,size=64m,mode=1777

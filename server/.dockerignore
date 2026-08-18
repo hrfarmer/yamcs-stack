@@ -1,0 +1,13 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+.tools
+.venv
+inputs
+runtime
+tests
+src
+tools
+README.md
+uv.lock

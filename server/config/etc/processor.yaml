@@ -1,0 +1,37 @@
+realtime:
+  services:
+    - class: org.yamcs.StreamTmPacketProvider
+    - class: org.yamcs.StreamTcCommandReleaser
+    - class: org.yamcs.tctm.StreamParameterProvider
+      args:
+        streams: ["pp_realtime", "sys_param"]
+    - class: org.yamcs.algorithms.AlgorithmManager
+    - class: org.yamcs.parameter.LocalParameterManager
+  config:
+    subscribeAll: true
+    persistParameters: true
+    alarm:
+      parameterCheck: true
+      parameterServer: enabled
+    tmProcessor:
+      ignoreOutOfContainerEntries: false
+    recordInitialValues: true
+    recordLocalValues: true
+
+Archive:
+  services:
+    - class: org.yamcs.tctm.ReplayService
+    - class: org.yamcs.algorithms.AlgorithmManager
+
+ParameterArchive:
+  services:
+    - class: org.yamcs.tctm.ReplayService
+    - class: org.yamcs.algorithms.AlgorithmManager
+
+ArchiveRetrieval:
+  services:
+    - class: org.yamcs.tctm.ReplayService
+    - class: org.yamcs.algorithms.AlgorithmManager
+  config:
+    subscribeContainerArchivePartitions: false
+

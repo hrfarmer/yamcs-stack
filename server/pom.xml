@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>space.proves</groupId>
+  <artifactId>proves-yamcs</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>17</maven.compiler.release>
+    <yamcs.version>5.12.8</yamcs.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.yamcs</groupId>
+      <artifactId>yamcs-core</artifactId>
+      <version>${yamcs.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.yamcs</groupId>
+      <artifactId>yamcs-web</artifactId>
+      <version>${yamcs.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>17</release>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.yamcs</groupId>
+        <artifactId>yamcs-maven-plugin</artifactId>
+        <version>1.3.5</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>detect</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>bundle-yamcs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>bundle</goal>
+            </goals>
+            <configuration>
+              <formats>
+                <format>tar.gz</format>
+              </formats>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+
