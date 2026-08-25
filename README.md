@@ -19,6 +19,8 @@ and deduplicates identical frames before Yamcs. Telecommands are sent through
 the station selected via `/Ground/ActiveTxStation` in Yamcs or the gateway UI
 on port 8091.
 
+**First-time setup:** [SETUP.md](SETUP.md).
+
 ## Quick start
 
 On the central host (Tailscale-reachable):

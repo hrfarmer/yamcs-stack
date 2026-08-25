@@ -17,6 +17,8 @@ Each `[[satellite]]` table points at a firmware bundle (`fprime-dictionary.json`
 plus `auth-key.hex`). The client selects HMAC key and SCID from the incoming
 Yamcs TC transfer frame.
 
+See **[SETUP.md](../SETUP.md)** to install and run a station.
+
 ## Setup
 
 ```sh
