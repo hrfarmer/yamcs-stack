@@ -133,6 +133,7 @@ python3 "$ROOT/sim/udp_tcp_bridge.py" \
   --fprime-tm-port "$FPRIME_UDP_PORT" \
   --fprime-tc-host 127.0.0.1 \
   --fprime-tc-port $((FPRIME_UDP_PORT + 1)) \
+  --tc-frame-length "$FRAME_LENGTH" \
   >"$LOG_DIR/bridge.log" 2>&1 &
 PIDS+=($!)
 
