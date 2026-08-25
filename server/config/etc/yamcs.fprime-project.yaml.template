@@ -58,6 +58,9 @@ mdb:
   - type: xtce
     args:
       file: /yamcs-config/mdb/fprime.xtce.xml
+  - type: xtce
+    args:
+      file: /yamcs-config/mdb/ground-control.xtce.xml
 
 streamConfig:
   tm:

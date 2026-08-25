@@ -1,0 +1,9 @@
+/.venv/
+/.tools/
+/.pytest_cache/
+/.ruff_cache/
+/runtime/
+/inputs/*/fprime-dictionary.json
+/inputs/*/auth-key.hex
+__pycache__/
+*.py[cod]

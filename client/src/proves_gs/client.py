@@ -1,14 +1,17 @@
-"""Bridge PROVES serial/TCP frames to and from the Yamcs UDP links."""
+"""Ground-station client: radio board passthrough to the central Yamcs gateway."""
 
 from __future__ import annotations
 
 import argparse
 import contextlib
 import itertools
+import json
 import socket
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import Counter
 from pathlib import Path
 from typing import BinaryIO
@@ -17,10 +20,15 @@ from fprime_gds.common.communication.ccsds.space_data_link import (
     SpaceDataLinkFramerDeframer,
 )
 
-from proves_yamcs.authentication import AuthenticateFramer
-from proves_yamcs.bundle import load_bundle
+from proves_gs.authentication import AuthenticateFramer
+from proves_gs.bundle import load_bundle
 
 sys.stdout.reconfigure(line_buffering=True)
+
+TC_FRAME_HEADER_SIZE = 5
+TC_FRAME_CRC_SIZE = 2
+SPACE_PACKET_HEADER_SIZE = 6
+_ccsds_sequence = itertools.count()
 
 
 def crc16_ccitt(data: bytes) -> int:
@@ -95,65 +103,6 @@ class TMFrameScanner:
         return frames
 
 
-def _forward_tm_serial(
-    serial_port: BinaryIO,
-    tm_socket: socket.socket,
-    yamcs_host: str,
-    tm_port: int,
-    frame_length: int,
-    spacecraft_ids: list[int],
-    vc_id: int,
-) -> None:
-    scanner = TMFrameScanner(frame_length, spacecraft_ids, vc_id)
-    counts: Counter[int] = Counter()
-    stats_started = time.monotonic()
-    print(
-        f"[TM] serial -> UDP {yamcs_host}:{tm_port} "
-        f"(frame length {frame_length}, SCIDs {spacecraft_ids})"
-    )
-    while True:
-        chunk = serial_port.read(max(1, getattr(serial_port, "in_waiting", 0) or 1))
-        for frame in scanner.feed(chunk):
-            tm_socket.sendto(frame, (yamcs_host, tm_port))
-            spacecraft_id = ((frame[0] << 8) | frame[1]) >> 4 & 0x3FF
-            counts[spacecraft_id] += 1
-        now = time.monotonic()
-        if now - stats_started >= 30:
-            summary = ", ".join(f"SCID {key}: {value}" for key, value in counts.items())
-            print(
-                f"[TM] stats: {summary or 'no frames'}, "
-                f"{scanner.frame_gaps} gaps, {scanner.junk_bytes} junk bytes"
-            )
-            counts.clear()
-            scanner.junk_bytes = 0
-            stats_started = now
-
-
-def _forward_tm_tcp(
-    tcp_socket: socket.socket,
-    tm_socket: socket.socket,
-    yamcs_host: str,
-    tm_port: int,
-    frame_length: int,
-) -> None:
-    print(f"[TM] TCP -> UDP {yamcs_host}:{tm_port} (frame length {frame_length})")
-    buffered = b""
-    while True:
-        chunk = tcp_socket.recv(4096)
-        if not chunk:
-            return
-        buffered += chunk
-        while len(buffered) >= frame_length:
-            frame, buffered = buffered[:frame_length], buffered[frame_length:]
-            tm_socket.sendto(frame, (yamcs_host, tm_port))
-
-
-TC_FRAME_HEADER_SIZE = 5
-TC_FRAME_CRC_SIZE = 2
-SPACE_PACKET_HEADER_SIZE = 6
-_ccsds_sequence = itertools.count()
-
-
 def fix_ccsds_primary_header(space_packet: bytearray) -> None:
     if len(space_packet) < SPACE_PACKET_HEADER_SIZE:
         raise ValueError("CCSDS space packet is shorter than its primary header")
@@ -182,14 +131,71 @@ def wrap_tc(
     return data_link_framer.frame(auth_framer.frame(bytes(space_packet)))
 
 
+def _forward_tm_serial(
+    serial_port: BinaryIO,
+    tm_socket: socket.socket,
+    server_host: str,
+    tm_port: int,
+    frame_length: int,
+    spacecraft_ids: list[int],
+    vc_id: int,
+    stats: dict[str, int],
+) -> None:
+    scanner = TMFrameScanner(frame_length, spacecraft_ids, vc_id)
+    counts: Counter[int] = Counter()
+    stats_started = time.monotonic()
+    print(
+        f"[TM] serial -> UDP {server_host}:{tm_port} "
+        f"(frame length {frame_length}, SCIDs {spacecraft_ids})"
+    )
+    while True:
+        chunk = serial_port.read(max(1, getattr(serial_port, "in_waiting", 0) or 1))
+        for frame in scanner.feed(chunk):
+            tm_socket.sendto(frame, (server_host, tm_port))
+            spacecraft_id = ((frame[0] << 8) | frame[1]) >> 4 & 0x3FF
+            counts[spacecraft_id] += 1
+            stats["tm_frames"] += 1
+        now = time.monotonic()
+        if now - stats_started >= 30:
+            summary = ", ".join(f"SCID {key}: {value}" for key, value in counts.items())
+            print(
+                f"[TM] stats: {summary or 'no frames'}, "
+                f"{scanner.frame_gaps} gaps, {scanner.junk_bytes} junk bytes"
+            )
+            counts.clear()
+            scanner.junk_bytes = 0
+            stats_started = now
+
+
+def _forward_tm_tcp(
+    tcp_socket: socket.socket,
+    tm_socket: socket.socket,
+    server_host: str,
+    tm_port: int,
+    frame_length: int,
+    stats: dict[str, int],
+) -> None:
+    print(f"[TM] TCP -> UDP {server_host}:{tm_port} (frame length {frame_length})")
+    buffered = b""
+    while True:
+        chunk = tcp_socket.recv(4096)
+        if not chunk:
+            return
+        buffered += chunk
+        while len(buffered) >= frame_length:
+            frame, buffered = buffered[:frame_length], buffered[frame_length:]
+            tm_socket.sendto(frame, (server_host, tm_port))
+            stats["tm_frames"] += 1
+
+
 def _forward_tc(
     tc_socket: socket.socket,
     writer,
     auth_framer: AuthenticateFramer,
     data_link_framer: SpaceDataLinkFramerDeframer,
     transport: str,
+    stats: dict[str, int],
 ) -> None:
-    count = 0
     print(f"[TC] UDP -> authenticate -> TC frame -> {transport}")
     while True:
         transfer_frame, _ = tc_socket.recvfrom(4096)
@@ -199,8 +205,55 @@ def _forward_tc(
             print(f"[TC] dropping malformed frame: {exc}")
             continue
         writer(output)
-        count += 1
-        print(f"[TC] #{count}: {len(transfer_frame)} bytes -> {len(output)} bytes")
+        stats["tc_frames"] += 1
+        print(
+            f"[TC] #{stats['tc_frames']}: "
+            f"{len(transfer_frame)} bytes -> {len(output)} bytes"
+        )
+
+
+def _heartbeat_loop(
+    api_url: str,
+    station_name: str,
+    tc_host: str,
+    tc_port: int,
+    stats: dict[str, int],
+    interval: float,
+    stop: threading.Event,
+) -> None:
+    endpoint = f"{api_url.rstrip('/')}/api/stations/{station_name}/heartbeat"
+    print(f"[register] heartbeating to {endpoint} every {interval:.0f}s")
+    while not stop.wait(interval):
+        payload = json.dumps(
+            {
+                "tc_host": tc_host,
+                "tc_port": tc_port,
+                "tm_frames": stats["tm_frames"],
+                "tc_frames": stats["tc_frames"],
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            endpoint,
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+                response.read()
+        except (OSError, urllib.error.URLError) as exc:
+            print(f"[register] heartbeat failed: {exc}")
+
+
+def _detect_tc_host(explicit: str | None, server_host: str) -> str:
+    if explicit:
+        return explicit
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect((server_host, 9))
+        return probe.getsockname()[0]
+    finally:
+        probe.close()
 
 
 def _spacecraft_ids(value: str) -> list[int]:
@@ -223,9 +276,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--uart-baud", type=int, default=115200)
     parser.add_argument("--tcp-host", default="127.0.0.1")
     parser.add_argument("--tcp-port", type=int, default=5000)
-    parser.add_argument("--yamcs-host", default="127.0.0.1")
-    parser.add_argument("--yamcs-tm-port", type=int, default=50000)
-    parser.add_argument("--yamcs-tc-port", type=int, default=50001)
+    parser.add_argument(
+        "--server-host",
+        default="127.0.0.1",
+        help="central Yamcs gateway host (Tailscale name or IP)",
+    )
+    parser.add_argument(
+        "--server-tm-port",
+        type=int,
+        default=51000,
+        help="gateway UDP port that accepts TM frames from ground stations",
+    )
+    parser.add_argument(
+        "--tc-listen-host",
+        default="0.0.0.0",
+        help="local bind address for TC frames from the gateway",
+    )
+    parser.add_argument(
+        "--tc-listen-port",
+        type=int,
+        default=50001,
+        help="local UDP port for TC frames from the gateway",
+    )
+    parser.add_argument(
+        "--tc-advertise-host",
+        default=None,
+        help="Tailscale address the gateway should use for TC (auto-detected)",
+    )
+    parser.add_argument(
+        "--gateway-api-url",
+        default=None,
+        help="gateway HTTP API base URL (default http://SERVER_HOST:8091)",
+    )
+    parser.add_argument(
+        "--station-name",
+        default=socket.gethostname(),
+        help="unique ground-station name registered with the gateway",
+    )
+    parser.add_argument("--heartbeat-interval", type=float, default=5.0)
     parser.add_argument("--auth-key", help="hex key override; prefer --auth-key-file")
     parser.add_argument("--auth-key-file", type=Path)
     parser.add_argument(
@@ -246,6 +334,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         raise ValueError("virtual channel ID must be in the range 0..7")
     if args.uart_baud < 1:
         raise ValueError("UART baud must be positive")
+    if args.heartbeat_interval < 1:
+        raise ValueError("heartbeat interval must be at least 1 second")
+    if not args.station_name.strip():
+        raise ValueError("station name must not be empty")
     return args
 
 
@@ -270,9 +362,13 @@ def main(argv: list[str] | None = None) -> int:
     data_link_framer = SpaceDataLinkFramerDeframer(
         scid=spacecraft_ids[0], vcid=args.vc_id, frame_size=frame_length
     )
+    stats = {"tm_frames": 0, "tc_frames": 0}
     tm_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     tc_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    tc_socket.bind(("0.0.0.0", args.yamcs_tc_port))
+    tc_socket.bind((args.tc_listen_host, args.tc_listen_port))
+    advertise_host = _detect_tc_host(args.tc_advertise_host, args.server_host)
+    api_url = args.gateway_api_url or f"http://{args.server_host}:8091"
+    stop = threading.Event()
 
     if args.mode == "serial":
         import serial
@@ -285,11 +381,12 @@ def main(argv: list[str] | None = None) -> int:
         tm_args = (
             transport,
             tm_socket,
-            args.yamcs_host,
-            args.yamcs_tm_port,
+            args.server_host,
+            args.server_tm_port,
             frame_length,
             spacecraft_ids,
             args.vc_id,
+            stats,
         )
         writer = transport.write
     else:
@@ -299,26 +396,46 @@ def main(argv: list[str] | None = None) -> int:
         tm_args = (
             transport,
             tm_socket,
-            args.yamcs_host,
-            args.yamcs_tm_port,
+            args.server_host,
+            args.server_tm_port,
             frame_length,
+            stats,
         )
         writer = transport.sendall
 
+    print(
+        f"[station] name={args.station_name} advertise TC to "
+        f"{advertise_host}:{args.tc_listen_port}"
+    )
     tm_thread = threading.Thread(target=tm_target, args=tm_args, daemon=True)
     tc_thread = threading.Thread(
         target=_forward_tc,
-        args=(tc_socket, writer, auth_framer, data_link_framer, args.mode),
+        args=(tc_socket, writer, auth_framer, data_link_framer, args.mode, stats),
+        daemon=True,
+    )
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop,
+        args=(
+            api_url,
+            args.station_name,
+            advertise_host,
+            args.tc_listen_port,
+            stats,
+            args.heartbeat_interval,
+            stop,
+        ),
         daemon=True,
     )
     tm_thread.start()
     tc_thread.start()
+    heartbeat_thread.start()
     try:
         tm_thread.join()
         tc_thread.join()
     except KeyboardInterrupt:
-        print("[adapter] interrupted")
+        print("[client] interrupted")
     finally:
+        stop.set()
         tc_socket.close()
         tm_socket.close()
         transport.close()

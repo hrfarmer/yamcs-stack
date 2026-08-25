@@ -15,6 +15,7 @@ from proves_yamcs.bundle import RuntimeBundle, load_bundle
 
 EXPECTED_SPACE_SYSTEM = "ReferenceDeployment_ReferenceDeployment"
 EXPECTED_ROOT_CONTAINER = "CCSDSSpacePacket"
+GROUND_XTCE_NAME = "ground-control.xtce.xml"
 
 
 def _atomic_text(path: Path, content: str, mode: int = 0o644) -> None:
@@ -44,11 +45,15 @@ def render_configuration(
     bundle: RuntimeBundle,
     template_dir: Path,
     runtime_dir: Path,
+    *,
+    ground_xtce_source: Path | None = None,
 ) -> Path:
     """Render all server configuration and return its root directory."""
     config_dir = runtime_dir / "config"
     etc_dir = config_dir / "etc"
+    mdb_dir = config_dir / "mdb"
     etc_dir.mkdir(parents=True, exist_ok=True)
+    mdb_dir.mkdir(parents=True, exist_ok=True)
     secret = _server_secret(runtime_dir)
 
     global_template = (template_dir / "yamcs.yaml.template").read_text(encoding="utf-8")
@@ -65,6 +70,11 @@ def render_configuration(
     ).replace("@FRAME_LENGTH@", str(bundle.frame_length))
     _atomic_text(etc_dir / "yamcs.fprime-project.yaml", instance_config)
     shutil.copyfile(template_dir / "processor.yaml", etc_dir / "processor.yaml")
+
+    source = ground_xtce_source or (
+        Path(__file__).resolve().parents[2] / "config" / "mdb" / GROUND_XTCE_NAME
+    )
+    shutil.copyfile(source, mdb_dir / GROUND_XTCE_NAME)
     return config_dir
 
 
@@ -98,7 +108,7 @@ def validate_xtce(path: Path) -> None:
 
 
 def prepare(input_dir: Path, runtime_dir: Path, template_dir: Path) -> RuntimeBundle:
-    bundle = load_bundle(input_dir)
+    bundle = load_bundle(input_dir, require_auth_key=False)
     for directory in ("data", "cache", "pids", "state"):
         (runtime_dir / directory).mkdir(parents=True, exist_ok=True)
     config_dir = render_configuration(bundle, template_dir, runtime_dir)

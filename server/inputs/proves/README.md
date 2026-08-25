@@ -1,16 +1,13 @@
-# PROVES runtime bundle
+# PROVES server input bundle
 
-Generate this directory from the firmware checkout:
+Provide at least:
+
+- `fprime-dictionary.json` — F Prime topology dictionary for XTCE generation
+
+`auth-key.hex` is optional here (telecommand authentication happens on the
+ground-station client). Generate the export from firmware:
 
 ```sh
 cd ~/code/spacelab/proves-core-reference
 make yamcs-export
 ```
-
-The resulting, gitignored bundle contains:
-
-- `fprime-dictionary.json`: the F Prime topology dictionary for the flashed build.
-- `auth-key.hex`: the matching 16-byte HMAC key, encoded as 32 hexadecimal characters.
-
-Never mix files from different firmware builds and never commit the key.
-

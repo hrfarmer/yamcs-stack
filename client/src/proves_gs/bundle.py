@@ -1,4 +1,4 @@
-"""Validation and loading for a PROVES Yamcs server input bundle."""
+"""Validation and loading for a PROVES ground-station runtime bundle."""
 
 from __future__ import annotations
 
@@ -19,14 +19,14 @@ class BundleError(ValueError):
 
 @dataclass(frozen=True)
 class RuntimeBundle:
-    """Validated paths and values needed by the Yamcs server."""
+    """Validated paths and values needed by the ground-station client."""
 
     directory: Path
     dictionary_path: Path
+    auth_key_path: Path
+    auth_key: str
     spacecraft_id: int
     frame_length: int
-    auth_key_path: Path | None = None
-    auth_key: str | None = None
 
 
 def _integer(value: Any, name: str) -> int:
@@ -68,14 +68,8 @@ def load_auth_key(path: Path) -> str:
     return value.lower()
 
 
-def load_bundle(
-    input_dir: str | Path, *, require_auth_key: bool = False
-) -> RuntimeBundle:
-    """Load and validate the server input contract.
-
-    The central server only needs the F Prime dictionary. The HMAC auth key is
-    used by ground-station clients and is optional here.
-    """
+def load_bundle(input_dir: str | Path) -> RuntimeBundle:
+    """Load and validate the stable two-file input contract."""
     directory = Path(input_dir).expanduser().resolve()
     dictionary_path = directory / DICTIONARY_FILENAME
     auth_key_path = directory / AUTH_KEY_FILENAME
@@ -102,17 +96,11 @@ def load_bundle(
     if frame_length < 8:
         raise BundleError(f"ComCfg.TmFrameFixedSize is too small: {frame_length}")
 
-    auth_key = None
-    resolved_auth_path: Path | None = None
-    if auth_key_path.is_file() or require_auth_key:
-        auth_key = load_auth_key(auth_key_path)
-        resolved_auth_path = auth_key_path
-
     return RuntimeBundle(
         directory=directory,
         dictionary_path=dictionary_path,
+        auth_key_path=auth_key_path,
+        auth_key=load_auth_key(auth_key_path),
         spacecraft_id=spacecraft_id,
         frame_length=frame_length,
-        auth_key_path=resolved_auth_path,
-        auth_key=auth_key,
     )

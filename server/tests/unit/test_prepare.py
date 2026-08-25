@@ -10,8 +10,6 @@ def bundle(tmp_path: Path) -> RuntimeBundle:
     return RuntimeBundle(
         directory=tmp_path,
         dictionary_path=tmp_path / "fprime-dictionary.json",
-        auth_key_path=tmp_path / "auth-key.hex",
-        auth_key="00" * 16,
         spacecraft_id=68,
         frame_length=248,
     )
@@ -26,6 +24,7 @@ def test_render_configuration_substitutes_all_dynamic_values(tmp_path):
     assert "@FRAME_LENGTH@" not in instance
     assert instance.count("spacecraftId: 68") == 2
     assert instance.count("248") == 3
+    assert (config / "mdb/ground-control.xtce.xml").is_file()
 
     secret_file = runtime / "secrets/yamcs-secret-key"
     assert secret_file.stat().st_mode & 0o777 == 0o600

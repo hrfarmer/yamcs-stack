@@ -15,6 +15,19 @@ def test_bundle_derives_firmware_constants():
     assert bundle.auth_key == "000102030405060708090a0b0c0d0e0f"
 
 
+def test_bundle_allows_dictionary_only(tmp_path):
+    fixture = Path("tests/fixtures/proves")
+    dictionary = tmp_path / "fprime-dictionary.json"
+    dictionary.write_text(
+        (fixture / "fprime-dictionary.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    bundle = load_bundle(tmp_path)
+    assert bundle.spacecraft_id == 68
+    assert bundle.auth_key is None
+
+
 @pytest.mark.parametrize(
     "value",
     ["", "abc", "z" * 32, "00" * 17, "0x" + "00" * 16],

@@ -1,0 +1,4 @@
+{
+  "install": "sudo apt-get update\nsudo apt-get install -y maven docker.io\nsudo service docker start || sudo systemctl start docker || true\ncd /workspace/server && make setup INPUT_DIR=tests/fixtures/proves && make prepare INPUT_DIR=tests/fixtures/proves\ncd /workspace/client && make setup",
+  "start": "cd /workspace/server && docker compose up -d yamcs && .venv/bin/python -c \"from proves_yamcs.supervisor import wait_until_ready; wait_until_ready('http://127.0.0.1:8090', 'fprime-project', 180)\""
+}

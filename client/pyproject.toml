@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "proves-gs-client"
+version = "0.1.0"
+description = "PROVES ground-station client: radio board passthrough to central Yamcs"
+requires-python = ">=3.13"
+dependencies = [
+    "fprime-gds==4.2.1",
+    "pyserial>=3.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.12,<0.13",
+]
+
+[project.scripts]
+proves-gs-client = "proves_gs.client:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/proves_gs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
