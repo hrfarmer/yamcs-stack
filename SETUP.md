@@ -5,15 +5,17 @@ stations**. Run server commands from `server/`, client commands from
 `client/`. Use the `make` targets (they install Python for you).
 
 ```text
- radio board ──► GS client ──Tailscale──► gateway ──► Yamcs (:8090)
+ radio board ──► GS client ──Tailscale──► gateway ──► Yamcs instances (:8090)
                        ▲                    │ (:8091)
                        └──── TC (one selected station) ────┘
+                                              Grafana (:3000)
 ```
 
-You need **one always-on server** (Docker) and **one host per radio**. The
-same machine can do both for a local test. Join them with
-[Tailscale](https://tailscale.com/) and keep ports off the public Internet
-(Yamcs has no login).
+Each F´ deployment is one Yamcs instance (own dictionary / spacecraft ID)
+listed in `server/config/deployments.toml`. You need **one always-on server**
+(Docker) and **one host per radio**. The same machine can do both for a
+local test. Join them with [Tailscale](https://tailscale.com/) and keep
+ports off the public Internet (Yamcs and Grafana have no login).
 
 ## Before you start
 
@@ -24,8 +26,8 @@ First `make setup` builds the Yamcs image and can take a while.
 device (often `/dev/ttyUSB0`) and `dialout` on Debian/Ubuntu:
 `sudo usermod -aG dialout "$USER"` then log in again. No Docker.
 
-**Files from flight software** (same dictionary on every machine; never
-commit the key):
+**Files from flight software** (same dictionary on server and client;
+never commit the key):
 
 ```sh
 cd ~/code/spacelab/proves-core-reference   # or your FSW checkout
@@ -34,7 +36,7 @@ make yamcs-export
 
 | File | Server | Ground station |
 | --- | --- | --- |
-| `fprime-dictionary.json` | required | required |
+| `fprime-dictionary.json` | required per deployment | required per `[[satellite]]` |
 | `auth-key.hex` | optional | required for a real radio |
 
 Clone this repo on every machine first.
@@ -42,6 +44,9 @@ Clone this repo on every machine first.
 ---
 
 ## 1. Server
+
+Default `config/deployments.toml` hosts `proves-flight` from
+`inputs/proves/`:
 
 ```sh
 cd server
@@ -56,14 +61,19 @@ make yamcs
 That last command stays in the foreground. Stop it with `make yamcs-stop`
 from another terminal.
 
-- Yamcs: http://localhost:8090 (or `http://<tailscale-name>:8090`)
+- Yamcs: http://localhost:8090 (instance selector picks the satellite)
+- Grafana: http://localhost:3000 (one folder per deployment)
 - Ground stations: http://localhost:8091 (empty until a client connects)
 
-No flight export yet? Use the test dictionary instead:
+No flight export yet? Use the test deployments file:
 
 ```sh
-make yamcs INPUT_DIR=tests/fixtures/proves
+make yamcs DEPLOYMENTS=tests/fixtures/deployments.toml
 ```
+
+A second satellite is another `[[deployment]]` in `config/deployments.toml`
+plus its own `input_dir` (and dictionary). TM ports default to
+`50000, 50002, …`; TC from every instance shares UDP `50001`.
 
 ---
 
@@ -86,10 +96,15 @@ Edit `config/gs.toml`:
 server_host = "yamcs-server"   # Tailscale name or 100.x IPv4
 station_name = "gs-lab"        # unique per station
 uart_device = "/dev/ttyUSB0"   # serial mode; TCP mode uses tcp_host / tcp_port
+
+[[satellite]]
+name = "proves-flight"
+input_dir = "inputs/proves"
 ```
 
-If telecommands never arrive, set `tc_advertise_host` to this station’s
-Tailscale IPv4.
+Add another `[[satellite]]` for each extra deployment (matching
+`deployments.toml`). If telecommands never arrive, set
+`tc_advertise_host` to this station’s Tailscale IPv4.
 
 ```sh
 make run
@@ -97,7 +112,8 @@ make run
 
 Leave it running. For a TCP bent-pipe (no UART), copy
 `config/gs.tcp.example.toml` instead and set `tcp_host` / `tcp_port`.
-`skip_auth = true` is for simulators only, not real radios.
+`skip_auth = true` on a `[[satellite]]` is for simulators only, not real
+radios.
 
 ---
 
@@ -106,8 +122,9 @@ Leave it running. For a TCP bent-pipe (no UART), copy
 1. Open `http://<server>:8091` — the station should be **online**.
 2. Select it as TX and click **Apply** (or set `/Ground/ActiveTxStation` in
    Yamcs).
-3. Open Yamcs at `:8090`, instance `fprime-project`. TM should move once
-   the radio is producing frames. `CMD_NO_OP` is a safe command check.
+3. Open Yamcs at `:8090` and pick the instance. TM should move once the
+   radio is producing frames. `CMD_NO_OP` is a safe command check.
+   Grafana at `:3000` has Overview / Commanding per deployment.
 
 No TX station selected → gateway shows `tc_dropped`. That is normal.
 
@@ -118,15 +135,15 @@ No TX station selected → gateway shows `tc_dropped`. That is normal.
 | What you see | Try |
 | --- | --- |
 | Docker / daemon errors | `docker info` |
-| `dictionary is missing` | copy the JSON into `inputs/proves/` |
+| `dictionary is missing` | copy the JSON into the deployment `input_dir` |
 | Heartbeat failed / station missing | `curl http://<server>:8091/api/status` from the GS host |
 | Station online, TC dropped | select TX; set `tc_advertise_host` |
 | Serial open fails | device path, baud, `dialout` |
 | Client wants a key | add `auth-key.hex`, or `skip_auth` only for a sim |
 
-Ports on the server: TCP `8090` (Yamcs), TCP `8091` (gateway), UDP `51000`
-(TM). On each GS: UDP `50001` (TC). Tailscale only.
+Ports on the server: TCP `8090` (Yamcs), TCP `3000` (Grafana), TCP `8091`
+(gateway), UDP `51000` (TM). On each GS: UDP `50001` (TC). Tailscale only.
 
-Full-stack sim without a radio: [`sim/README.md`](sim/README.md)
-(`./scripts/run_e2e_sim.sh`). More detail:
+No radio? Keep a two-satellite sim up with `./scripts/run_test_sim.sh`
+(see [`sim/README.md`](sim/README.md)). More detail:
 [`server/README.md`](server/README.md), [`client/README.md`](client/README.md).
