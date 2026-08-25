@@ -24,7 +24,7 @@ services:
 dataLinks:
   - name: UDP_TM_IN
     class: org.yamcs.tctm.ccsds.UdpTmFrameLink
-    port: 50000
+    port: @TM_PORT@
     frameType: "TM"
     spacecraftId: @SPACECRAFT_ID@
     frameLength: @FRAME_LENGTH@
@@ -42,7 +42,7 @@ dataLinks:
   - name: UDP_TC_OUT
     class: org.yamcs.tctm.ccsds.UdpTcFrameLink
     host: host.docker.internal
-    port: 50001
+    port: @TC_PORT@
     spacecraftId: @SPACECRAFT_ID@
     maxFrameLength: @FRAME_LENGTH@
     errorDetection: CRC16
@@ -57,7 +57,7 @@ dataLinks:
 mdb:
   - type: xtce
     args:
-      file: /yamcs-config/mdb/fprime.xtce.xml
+      file: /yamcs-config/mdb/@MDB_FILE@
   - type: xtce
     args:
       file: /yamcs-config/mdb/ground-control.xtce.xml

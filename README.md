@@ -6,15 +6,18 @@ Client/server ground system for PROVES flight software:
 - [`client/`](client/): ground-station radio passthrough (serial/TCP) over Tailscale to the gateway
 
 ```text
- radio board ──► GS client (HMAC + CCSDS) ──Tailscale──► gateway ──► Yamcs
+ radio board ──► GS client (HMAC + CCSDS) ──Tailscale──► gateway ──► Yamcs instances
                        ▲                                  │
                        └──────── TC (selected station) ───┘
 ```
 
-Multiple ground stations may stream telemetry concurrently; the gateway
-deduplicates identical frames before Yamcs. Telecommands are sent through the
-station selected via `/Ground/ActiveTxStation` in Yamcs or the gateway UI on
-port 8091.
+Multiple F´ deployments (satellites) share one Yamcs process: each deployment
+is a Yamcs instance with its own dictionary, spacecraft ID, and TM UDP port.
+The list lives in `server/config/deployments.toml`. Multiple ground stations
+may stream telemetry concurrently; the gateway routes frames by spacecraft ID
+and deduplicates identical frames before Yamcs. Telecommands are sent through
+the station selected via `/Ground/ActiveTxStation` in Yamcs or the gateway UI
+on port 8091.
 
 ## Quick start
 
@@ -22,22 +25,23 @@ On the central host (Tailscale-reachable):
 
 ```sh
 cd server
-# place fprime-dictionary.json under inputs/proves/
+# place fprime-dictionary.json under inputs/proves/ (see config/deployments.toml)
 make setup
-make yamcs
+make yamcs DEPLOYMENTS=tests/fixtures/deployments.toml
 ```
 
 On each ground station:
 
 ```sh
 cd client
-# place matching dictionary + auth-key.hex under inputs/proves/
-make setup
-UART_DEVICE=/dev/ttyUSB0 SERVER_HOST=<yamcs-tailscale-name> STATION_NAME=gs-lab make run
+# place matching dictionary + auth-key.hex under the satellite input_dir
+cp config/gs.serial.example.toml config/gs.toml
+# edit server_host, station_name, uart_device, and [[satellite]] tables
+make run CONFIG=config/gs.toml
 ```
 
-Open Yamcs at `http://<server>:8090` and the ground-station panel at
-`http://<server>:8091`.
+Open Yamcs at `http://<server>:8090` (instance selector chooses the satellite)
+and the ground-station panel at `http://<server>:8091`.
 
 ## Simulated full-stack CI / local e2e
 

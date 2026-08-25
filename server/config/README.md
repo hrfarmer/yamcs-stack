@@ -1,9 +1,13 @@
 # Yamcs configuration
 
-Files under `etc/` are templates for the single `fprime-project` instance.
-`make yamcs-dict` reads the exported F Prime dictionary, substitutes the CCSDS
-spacecraft ID and fixed frame length, generates the XTCE MDB, and writes the
-complete runtime tree to `runtime/config`.
+`deployments.toml` (next to this file, or another path passed as
+`DEPLOYMENTS=`) lists the F´ deployments hosted by this Yamcs process. Each
+`[[deployment]]` becomes one Yamcs instance with its own XTCE mission database,
+spacecraft ID, and TM UDP port.
+
+`make prepare` reads that file, substitutes CCSDS spacecraft IDs and frame
+lengths into `etc/yamcs.instance.yaml.template`, generates one XTCE MDB per
+deployment, writes `runtime/config/deployments.json`, and emits
+`runtime/compose.udp.yaml` so Docker publishes each TM port.
 
 Do not put secrets or generated mission databases in this directory.
-
