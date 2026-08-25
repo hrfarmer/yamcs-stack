@@ -116,7 +116,11 @@ DEPLOY="$FPRIME_REF_DIR/FprimeYamcsReference/YamcsDeployment"
 log "building YamcsDeployment"
 (
   cd "$DEPLOY"
-  fprime-util generate
+  if [[ -d "$FPRIME_REF_DIR/build-fprime-automatic-native" ]]; then
+    log "reusing existing F´ build cache"
+  else
+    fprime-util generate
+  fi
   fprime-util build
 )
 
