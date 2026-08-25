@@ -6,7 +6,7 @@ bent-pipe) and passes CCSDS frames to the central Yamcs gateway over Tailscale.
 ## Responsibilities
 
 - Scan/sync TM frames from serial (or read fixed frames from TCP)
-- Send TM UDP datagrams to `SERVER_HOST:51000`
+- Send TM UDP datagrams to the gateway TM ingest port (`:51000` by default)
 - Register with the gateway (`:8091`) so the station can be selected for TX
 - Receive TC UDP on the local Tailscale address (`:50001` by default)
 - Wrap telecommands with PROVES HMAC auth + space-data-link framing before the radio
@@ -14,22 +14,29 @@ bent-pipe) and passes CCSDS frames to the central Yamcs gateway over Tailscale.
 ## Setup
 
 ```sh
-# Matching export from proves-core-reference (dictionary + auth-key.hex)
 make setup
-UART_DEVICE=/dev/ttyUSB0 \
-  SERVER_HOST=<yamcs-tailscale-name-or-ip> \
-  STATION_NAME=gs-lab \
-  make run
+cp config/gs.serial.example.toml config/gs.toml
+# edit config/gs.toml: server_host, station_name, uart_device, …
+make run CONFIG=config/gs.toml
 ```
 
 TCP bent-pipe mode:
 
 ```sh
-GS_HOST=radio-proxy.example SERVER_HOST=<yamcs-host> STATION_NAME=gs-tcp make run-tcp
+cp config/gs.tcp.example.toml config/gs.toml
+# edit tcp_host / server_host / station_name
+make run CONFIG=config/gs.toml
 ```
 
-Use `--tc-advertise-host` if auto-detection picks the wrong interface for TC
-routing (it should be the station's Tailscale IPv4 address).
+Or invoke the client directly:
+
+```sh
+.venv/bin/proves-gs-client --config config/gs.toml
+```
+
+CLI flags still override individual keys for one-off debugging; prefer editing the
+TOML file for normal operation. Set `tc_advertise_host` if auto-detection picks
+the wrong interface for TC routing (use the station's Tailscale IPv4 address).
 
 ## Bundle
 

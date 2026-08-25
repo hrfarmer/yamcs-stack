@@ -22,6 +22,7 @@ from fprime_gds.common.communication.ccsds.space_data_link import (
 
 from proves_gs.authentication import AuthenticateFramer
 from proves_gs.bundle import load_bundle
+from proves_gs.config import ClientConfig, ConfigError, apply_overrides, load_config
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -272,184 +273,184 @@ def _detect_tc_host(explicit: str | None, server_host: str) -> str:
         probe.close()
 
 
-def _spacecraft_ids(value: str) -> list[int]:
+def _spacecraft_ids(value: str) -> tuple[int, ...]:
     try:
         values = [int(item.strip(), 0) for item in value.split(",") if item.strip()]
     except ValueError as exc:
         raise argparse.ArgumentTypeError("spacecraft IDs must be integers") from exc
     if not values or any(not 0 <= item <= 0x3FF for item in values):
         raise argparse.ArgumentTypeError("spacecraft IDs must be in the range 0..1023")
-    return values
+    return tuple(values)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("--mode", choices=["serial", "tcp"], default="serial")
-    parser.add_argument("--input-dir", type=Path, default=Path("inputs/proves"))
-    parser.add_argument("--uart-device", default="/dev/ttyUSB0")
-    parser.add_argument("--uart-baud", type=int, default=115200)
-    parser.add_argument("--tcp-host", default="127.0.0.1")
-    parser.add_argument("--tcp-port", type=int, default=5000)
     parser.add_argument(
-        "--server-host",
-        default="127.0.0.1",
-        help="central Yamcs gateway host (Tailscale name or IP)",
-    )
-    parser.add_argument(
-        "--server-tm-port",
-        type=int,
-        default=51000,
-        help="gateway UDP port that accepts TM frames from ground stations",
-    )
-    parser.add_argument(
-        "--tc-listen-host",
-        default="0.0.0.0",
-        help="local bind address for TC frames from the gateway",
-    )
-    parser.add_argument(
-        "--tc-listen-port",
-        type=int,
-        default=50001,
-        help="local UDP port for TC frames from the gateway",
-    )
-    parser.add_argument(
-        "--tc-advertise-host",
-        default=None,
-        help="Tailscale address the gateway should use for TC (auto-detected)",
-    )
-    parser.add_argument(
-        "--gateway-api-url",
-        default=None,
-        help="gateway HTTP API base URL (default http://SERVER_HOST:8091)",
-    )
-    parser.add_argument(
-        "--station-name",
-        default=socket.gethostname(),
-        help="unique ground-station name registered with the gateway",
-    )
-    parser.add_argument("--heartbeat-interval", type=float, default=5.0)
-    parser.add_argument("--auth-key", help="hex key override; prefer --auth-key-file")
-    parser.add_argument("--auth-key-file", type=Path)
-    parser.add_argument(
-        "--sequence-number-file",
+        "--config",
         type=Path,
-        default=Path("runtime/state/sequence-number"),
+        required=True,
+        help="TOML config file (see config/*.example.toml)",
     )
+    # Optional CLI overrides for one-off debugging; prefer editing the config file.
+    parser.add_argument("--mode", choices=["serial", "tcp"])
+    parser.add_argument("--input-dir", type=Path)
+    parser.add_argument("--uart-device")
+    parser.add_argument("--uart-baud", type=int)
+    parser.add_argument("--tcp-host")
+    parser.add_argument("--tcp-port", type=int)
+    parser.add_argument("--server-host")
+    parser.add_argument("--server-tm-port", type=int)
+    parser.add_argument("--tc-listen-host")
+    parser.add_argument("--tc-listen-port", type=int)
+    parser.add_argument("--tc-advertise-host")
+    parser.add_argument("--gateway-api-url")
+    parser.add_argument("--station-name")
+    parser.add_argument("--heartbeat-interval", type=float)
+    parser.add_argument("--auth-key")
+    parser.add_argument("--auth-key-file", type=Path)
+    parser.add_argument("--sequence-number-file", type=Path)
     parser.add_argument("--frame-length", type=int)
     parser.add_argument("--spacecraft-id", type=_spacecraft_ids, action="append")
-    parser.add_argument("--vc-id", type=int, default=1)
-    parser.add_argument("--spi", type=int, default=0)
+    parser.add_argument("--vc-id", type=int)
+    parser.add_argument("--spi", type=int)
     parser.add_argument(
         "--skip-auth",
-        action="store_true",
-        help="omit PROVES HMAC (for stock F´ ComCcsds deployments in simulation)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="omit / require PROVES HMAC (overrides config skip_auth)",
     )
     return parser
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_config(argv: list[str] | None = None) -> ClientConfig:
     args = build_parser().parse_args(argv)
-    if not 0 <= args.vc_id <= 7:
-        raise ValueError("virtual channel ID must be in the range 0..7")
-    if args.uart_baud < 1:
-        raise ValueError("UART baud must be positive")
-    if args.heartbeat_interval < 1:
-        raise ValueError("heartbeat interval must be at least 1 second")
-    if not args.station_name.strip():
-        raise ValueError("station name must not be empty")
-    return args
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        raise SystemExit(f"config error: {exc}") from exc
+
+    spacecraft_ids = None
+    if args.spacecraft_id:
+        spacecraft_ids = tuple(item for group in args.spacecraft_id for item in group)
+
+    try:
+        return apply_overrides(
+            config,
+            {
+                "mode": args.mode,
+                "input_dir": args.input_dir,
+                "uart_device": args.uart_device,
+                "uart_baud": args.uart_baud,
+                "tcp_host": args.tcp_host,
+                "tcp_port": args.tcp_port,
+                "server_host": args.server_host,
+                "server_tm_port": args.server_tm_port,
+                "tc_listen_host": args.tc_listen_host,
+                "tc_listen_port": args.tc_listen_port,
+                "tc_advertise_host": args.tc_advertise_host,
+                "gateway_api_url": args.gateway_api_url,
+                "station_name": args.station_name,
+                "heartbeat_interval": args.heartbeat_interval,
+                "auth_key": args.auth_key,
+                "auth_key_file": args.auth_key_file,
+                "sequence_number_file": args.sequence_number_file,
+                "frame_length": args.frame_length,
+                "spacecraft_ids": spacecraft_ids,
+                "vc_id": args.vc_id,
+                "spi": args.spi,
+                "skip_auth": args.skip_auth,
+            },
+        )
+    except ConfigError as exc:
+        raise SystemExit(f"config error: {exc}") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    bundle = load_bundle(args.input_dir, require_auth_key=not args.skip_auth)
-    spacecraft_ids = (
-        [item for group in args.spacecraft_id for item in group]
-        if args.spacecraft_id
-        else [bundle.spacecraft_id]
-    )
-    frame_length = args.frame_length or bundle.frame_length
+    config = parse_config(argv)
+    bundle = load_bundle(config.input_dir, require_auth_key=not config.skip_auth)
+    spacecraft_ids = list(config.spacecraft_ids or (bundle.spacecraft_id,))
+    frame_length = config.frame_length or bundle.frame_length
     auth_framer: AuthenticateFramer | None
-    if args.skip_auth:
+    if config.skip_auth:
         auth_framer = None
-        print("[client] PROVES HMAC authentication disabled (--skip-auth)")
-    elif args.auth_key is not None:
+        print("[client] PROVES HMAC authentication disabled (skip_auth)")
+    elif config.auth_key is not None:
         auth_framer = AuthenticateFramer(
-            args.auth_key, args.sequence_number_file, args.spi
+            config.auth_key, config.sequence_number_file, config.spi
         )
     else:
-        key_file = args.auth_key_file or bundle.auth_key_path
+        key_file = config.auth_key_file or bundle.auth_key_path
         if key_file is None:
-            raise SystemExit("authentication key file is required unless --skip-auth")
+            raise SystemExit("authentication key file is required unless skip_auth")
         auth_framer = AuthenticateFramer.from_key_file(
-            key_file, args.sequence_number_file, args.spi
+            key_file, config.sequence_number_file, config.spi
         )
 
     data_link_framer = SpaceDataLinkFramerDeframer(
-        scid=spacecraft_ids[0], vcid=args.vc_id, frame_size=frame_length
+        scid=spacecraft_ids[0], vcid=config.vc_id, frame_size=frame_length
     )
     stats = {"tm_frames": 0, "tc_frames": 0}
     tm_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     tc_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    tc_socket.bind((args.tc_listen_host, args.tc_listen_port))
-    advertise_host = _detect_tc_host(args.tc_advertise_host, args.server_host)
-    api_url = args.gateway_api_url or f"http://{args.server_host}:8091"
+    tc_socket.bind((config.tc_listen_host, config.tc_listen_port))
+    advertise_host = _detect_tc_host(config.tc_advertise_host, config.server_host)
+    api_url = config.gateway_api_url or f"http://{config.server_host}:8091"
     stop = threading.Event()
 
-    if args.mode == "serial":
+    if config.mode == "serial":
         import serial
 
-        print(f"[serial] opening {args.uart_device} at {args.uart_baud} baud")
-        transport = serial.Serial(args.uart_device, args.uart_baud, timeout=0.1)
+        print(f"[serial] opening {config.uart_device} at {config.uart_baud} baud")
+        transport = serial.Serial(config.uart_device, config.uart_baud, timeout=0.1)
         with contextlib.suppress(AttributeError, OSError):
             transport.set_buffer_size(rx_size=65536)
         tm_target = _forward_tm_serial
         tm_args = (
             transport,
             tm_socket,
-            args.server_host,
-            args.server_tm_port,
+            config.server_host,
+            config.server_tm_port,
             frame_length,
             spacecraft_ids,
-            args.vc_id,
+            config.vc_id,
             stats,
         )
         writer = transport.write
     else:
-        print(f"[tcp] connecting to {args.tcp_host}:{args.tcp_port}")
-        transport = socket.create_connection((args.tcp_host, args.tcp_port))
+        print(f"[tcp] connecting to {config.tcp_host}:{config.tcp_port}")
+        transport = socket.create_connection((config.tcp_host, config.tcp_port))
         tm_target = _forward_tm_tcp
         tm_args = (
             transport,
             tm_socket,
-            args.server_host,
-            args.server_tm_port,
+            config.server_host,
+            config.server_tm_port,
             frame_length,
             stats,
         )
         writer = transport.sendall
 
     print(
-        f"[station] name={args.station_name} advertise TC to "
-        f"{advertise_host}:{args.tc_listen_port}"
+        f"[station] name={config.station_name} advertise TC to "
+        f"{advertise_host}:{config.tc_listen_port}"
     )
     tm_thread = threading.Thread(target=tm_target, args=tm_args, daemon=True)
     tc_thread = threading.Thread(
         target=_forward_tc,
-        args=(tc_socket, writer, auth_framer, data_link_framer, args.mode, stats),
+        args=(tc_socket, writer, auth_framer, data_link_framer, config.mode, stats),
         daemon=True,
     )
     heartbeat_thread = threading.Thread(
         target=_heartbeat_loop,
         args=(
             api_url,
-            args.station_name,
+            config.station_name,
             advertise_host,
-            args.tc_listen_port,
+            config.tc_listen_port,
             stats,
-            args.heartbeat_interval,
+            config.heartbeat_interval,
             stop,
         ),
         daemon=True,

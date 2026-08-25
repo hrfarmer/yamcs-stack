@@ -11,6 +11,7 @@ from proves_gs.client import (
     extract_space_packet,
     fix_ccsds_primary_header,
 )
+from proves_gs.config import ConfigError, apply_overrides, load_config
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "proves"
 
@@ -64,11 +65,56 @@ def test_extract_rejects_short_tc_frame():
         extract_space_packet(b"short")
 
 
-def test_client_parser_defaults_and_skip_auth():
+def test_client_parser_requires_config():
     parser = build_parser()
-    assert parser.parse_args([]).server_tm_port == 51000
-    assert parser.parse_args([]).mode == "serial"
-    assert parser.parse_args(["--skip-auth"]).skip_auth is True
+    with pytest.raises(SystemExit):
+        parser.parse_args([])
+    assert parser.parse_args(["--config", "config/gs.toml"]).config == Path(
+        "config/gs.toml"
+    )
+
+
+def test_load_config_resolves_paths_and_overrides(tmp_path):
+    config_path = tmp_path / "gs.toml"
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    config_path.write_text(
+        "\n".join(
+            [
+                'mode = "tcp"',
+                'input_dir = "inputs"',
+                'server_host = "yamcs.tailnet"',
+                'station_name = "gs-a"',
+                'tcp_host = "127.0.0.1"',
+                "tcp_port = 5000",
+                "skip_auth = true",
+                "spacecraft_ids = [68, 67]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    assert config.mode == "tcp"
+    assert config.input_dir == input_dir.resolve()
+    assert config.spacecraft_ids == (68, 67)
+    assert config.skip_auth is True
+
+    updated = apply_overrides(config, {"station_name": "gs-b", "tcp_port": 6000})
+    assert updated.station_name == "gs-b"
+    assert updated.tcp_port == 6000
+    assert updated.server_host == "yamcs.tailnet"
+
+
+def test_load_config_rejects_unknown_keys(tmp_path):
+    config_path = tmp_path / "bad.toml"
+    config_path.write_text(
+        'mode = "serial"\nstation_name = "x"\nbogus = 1\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="unknown config keys"):
+        load_config(config_path)
 
 
 def test_authentication_known_vector_and_persistent_sequence(tmp_path):

@@ -18,8 +18,8 @@ Yamcs Docker (:8090 / :50000)
 
 On a real Tailscale GS the client can keep TC on `:50001`; the e2e script uses
 `:51001` so it does not collide with the gateway's Yamcs-TC socket on loopback.
-`--skip-auth` is required because stock ComCcsds does not use the PROVES HMAC
-telecommand wrapper.
+`--skip-auth` / `skip_auth = true` in the generated client TOML is required
+because stock ComCcsds does not use the PROVES HMAC telecommand wrapper.
 
 ## Local run
 

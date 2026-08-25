@@ -1,0 +1,26 @@
+# Example serial ground-station client config.
+# Copy to gs.toml (or another path) and edit for your site:
+#   cp config/gs.serial.example.toml config/gs.toml
+#   make run CONFIG=config/gs.toml
+
+mode = "serial"
+input_dir = "inputs/proves"
+server_host = "127.0.0.1"
+station_name = "gs-lab"
+
+uart_device = "/dev/ttyUSB0"
+uart_baud = 115200
+
+# server_tm_port = 51000
+# tc_listen_host = "0.0.0.0"
+# tc_listen_port = 50001
+# tc_advertise_host = "100.x.y.z"   # Tailscale IPv4 if auto-detect is wrong
+# gateway_api_url = "http://127.0.0.1:8091"
+# heartbeat_interval = 5.0
+# sequence_number_file = "runtime/state/sequence-number"
+# auth_key_file = "inputs/proves/auth-key.hex"
+# spacecraft_ids = [68]
+# frame_length = 248
+# vc_id = 1
+# spi = 0
+# skip_auth = false

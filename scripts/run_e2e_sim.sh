@@ -163,18 +163,22 @@ PIDS+=($!)
 sleep 2
 
 log "starting GS client"
+CLIENT_CONFIG="$WORK/gs-client.toml"
+cat >"$CLIENT_CONFIG" <<EOF
+mode = "tcp"
+input_dir = "$BUNDLE_DIR"
+server_host = "127.0.0.1"
+station_name = "ci-gs"
+skip_auth = true
+tcp_host = "127.0.0.1"
+tcp_port = $BRIDGE_TCP_PORT
+tc_listen_port = $CLIENT_TC_PORT
+tc_advertise_host = "127.0.0.1"
+heartbeat_interval = 2.0
+sequence_number_file = "$WORK/client-sequence"
+EOF
 "$ROOT/client/.venv/bin/proves-gs-client" \
-  --mode tcp \
-  --input-dir "$BUNDLE_DIR" \
-  --tcp-host 127.0.0.1 \
-  --tcp-port "$BRIDGE_TCP_PORT" \
-  --server-host 127.0.0.1 \
-  --server-tm-port 51000 \
-  --tc-listen-port "$CLIENT_TC_PORT" \
-  --tc-advertise-host 127.0.0.1 \
-  --station-name ci-gs \
-  --skip-auth \
-  --heartbeat-interval 2 \
+  --config "$CLIENT_CONFIG" \
   >"$LOG_DIR/client.log" 2>&1 &
 PIDS+=($!)
 
