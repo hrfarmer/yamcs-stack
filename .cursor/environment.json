@@ -1,0 +1,11 @@
+{
+  "name": "yamcs-stack",
+  "install": "./.cursor/install.sh",
+  "start": "./.cursor/start.sh",
+  "ports": [
+    {
+      "name": "Yamcs web interface",
+      "port": 8090
+    }
+  ]
+}
