@@ -6,7 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${E2E_WORK_DIR:-$ROOT/.e2e}"
 FPRIME_REF_DIR="${FPRIME_REF_DIR:-$WORK/fprime-yamcs-reference}"
 FPRIME_REF_URL="${FPRIME_REF_URL:-https://github.com/fprime-community/fprime-yamcs-reference.git}"
-FPRIME_REF_REF="${FPRIME_REF_REF:-main}"
+# Pin a release: main currently uses FPP "system" syntax that breaks with shallow/mismatched tools.
+FPRIME_REF_REF="${FPRIME_REF_REF:-v0.1.0}"
 BUNDLE_DIR="$WORK/bundle"
 LOG_DIR="$WORK/logs"
 FPRIME_UDP_PORT="${FPRIME_UDP_PORT:-52000}"
@@ -46,8 +47,10 @@ docker compose version >/dev/null
 
 if [[ ! -d "$FPRIME_REF_DIR/.git" ]]; then
   log "cloning $FPRIME_REF_URL ($FPRIME_REF_REF)"
-  git clone --recursive --branch "$FPRIME_REF_REF" --depth 1 \
-    "$FPRIME_REF_URL" "$FPRIME_REF_DIR"
+  # Avoid `git clone --recursive --depth 1`: shallow recursive clones often miss the
+  # pinned lib/fprime SHA and then FPP/tools disagree with the framework sources.
+  git clone --branch "$FPRIME_REF_REF" --depth 1 "$FPRIME_REF_URL" "$FPRIME_REF_DIR"
+  git -C "$FPRIME_REF_DIR" submodule update --init --recursive
 else
   log "using existing F´ checkout at $FPRIME_REF_DIR"
 fi
@@ -58,6 +61,8 @@ python3 -m venv "$WORK/fprime-venv"
 source "$WORK/fprime-venv/bin/activate"
 python -m pip install -U pip wheel
 python -m pip install -r "$FPRIME_REF_DIR/requirements.txt"
+# Prefer the cmake package pinned by F´ over an older distro cmake when present.
+export PATH="$WORK/fprime-venv/bin:$PATH"
 
 DEPLOY="$FPRIME_REF_DIR/FprimeYamcsReference/YamcsDeployment"
 log "building YamcsDeployment"

@@ -45,6 +45,6 @@ Open Yamcs at `http://<server>:8090` and the ground-station panel at
 ./scripts/run_e2e_sim.sh
 ```
 
-Builds [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference),
-runs F´ + UDP/TCP bridge + GS client + Yamcs gateway, and asserts a `CMD_NO_OP`
-round-trip. See [`sim/README.md`](sim/README.md).
+Builds [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference)
+(`v0.1.0` by default), runs F´ + UDP/TCP bridge + GS client + Yamcs gateway, and
+asserts a `CMD_NO_OP` round-trip. See [`sim/README.md`](sim/README.md).

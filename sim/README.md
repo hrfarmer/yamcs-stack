@@ -1,8 +1,8 @@
 # Simulated full-stack e2e
 
-Build and run [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference),
-bridge its `Drv.Udp` CCSDS frames to the PROVES GS client over TCP, and exercise
-the central Yamcs gateway.
+Build and run [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference)
+(default tag `v0.1.0`), bridge its `Drv.Udp` CCSDS frames to the PROVES GS client
+over TCP, and exercise the central Yamcs gateway.
 
 ```text
 F´ YamcsDeployment (UDP :52000/:52001)
