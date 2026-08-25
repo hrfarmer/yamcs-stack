@@ -18,6 +18,10 @@ YAMCS_INSTANCE="${YAMCS_INSTANCE:-fprime-project}"
 
 mkdir -p "$WORK" "$LOG_DIR" "$BUNDLE_DIR"
 PIDS=()
+# Match the Makefile: Yamcs must run as the host user that owns runtime/{data,cache}.
+# GitHub Actions runners are typically uid 1001; compose defaults to 1000 otherwise.
+export YAMCS_UID="${YAMCS_UID:-$(id -u)}"
+export YAMCS_GID="${YAMCS_GID:-$(id -g)}"
 
 cleanup() {
   set +e
@@ -27,7 +31,12 @@ cleanup() {
   for pid in "${PIDS[@]:-}"; do
     wait "$pid" 2>/dev/null || true
   done
-  (cd "$ROOT/server" && docker compose down --remove-orphans) >/dev/null 2>&1 || true
+  (
+    cd "$ROOT/server"
+    docker compose ps >"$LOG_DIR/compose-ps.txt" 2>&1 || true
+    docker compose logs --no-color >"$LOG_DIR/compose.log" 2>&1 || true
+    docker compose down --remove-orphans
+  ) >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -107,9 +116,13 @@ log "preparing server + client environments"
   make setup
 )
 
-log "starting Yamcs"
+log "starting Yamcs (uid=$YAMCS_UID gid=$YAMCS_GID)"
 (
   cd "$ROOT/server"
+  # Fail fast on bad XTCE/config before the readiness wait.
+  docker compose run --rm --no-deps yamcs \
+    --check --no-color --etc-dir /yamcs-config/etc \
+    --data-dir /yamcs-data --cache-dir /yamcs-cache
   docker compose up -d yamcs
 )
 "$ROOT/server/.venv/bin/python" - <<PY
