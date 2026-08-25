@@ -8,7 +8,6 @@ FPRIME_REF_DIR="${FPRIME_REF_DIR:-$WORK/fprime-yamcs-reference}"
 FPRIME_REF_URL="${FPRIME_REF_URL:-https://github.com/fprime-community/fprime-yamcs-reference.git}"
 # Pin a release: main currently uses FPP "system" syntax that breaks with shallow/mismatched tools.
 FPRIME_REF_REF="${FPRIME_REF_REF:-v0.1.0}"
-BUNDLE_DIR="$WORK/bundle"
 LOG_DIR="$WORK/logs"
 FPRIME_UDP_PORT="${FPRIME_UDP_PORT:-52000}"
 # Must not collide with the gateway's Yamcs-TC ingest port (also :50001) on localhost.
@@ -16,8 +15,12 @@ CLIENT_TC_PORT="${CLIENT_TC_PORT:-51001}"
 BRIDGE_TCP_PORT="${BRIDGE_TCP_PORT:-5000}"
 YAMCS_URL="${YAMCS_URL:-http://127.0.0.1:8090}"
 YAMCS_INSTANCE="${YAMCS_INSTANCE:-proves-flight}"
+YAMCS_INSTANCE_B="${YAMCS_INSTANCE_B:-proves-engineering}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
 DEPLOYMENTS_FILE="$WORK/deployments.toml"
+BUNDLE_DIR_A="$WORK/bundle-$YAMCS_INSTANCE"
+BUNDLE_DIR_B="$WORK/bundle-$YAMCS_INSTANCE_B"
+FPRIME_UDP_PORT_B="${FPRIME_UDP_PORT_B:-$((FPRIME_UDP_PORT + 10))}"
 KEEP_ALIVE="${E2E_KEEP_ALIVE:-0}"
 SKIP_TEST="${E2E_SKIP_TEST:-0}"
 
@@ -29,8 +32,9 @@ for arg in "$@"; do
       cat <<EOF
 Usage: $(basename "$0") [--keep-alive] [--skip-test]
 
-  --keep-alive   Leave F´, the GS client, Yamcs, Grafana, and the gateway
-                 running until Ctrl+C (for interactive testing without a board).
+  --keep-alive   Leave two F´ deployments, the GS client, Yamcs, Grafana, and
+                 the gateway running until Ctrl+C (for interactive testing
+                 without a board).
   --skip-test    Start the stack without the CMD_NO_OP pytest round-trip.
 EOF
       exit 0
@@ -43,7 +47,7 @@ EOF
   esac
 done
 
-mkdir -p "$WORK" "$LOG_DIR" "$BUNDLE_DIR"
+mkdir -p "$WORK" "$LOG_DIR" "$BUNDLE_DIR_A" "$BUNDLE_DIR_B"
 PIDS=()
 # Match the Makefile: Yamcs must run as the host user that owns runtime/{data,cache}.
 # GitHub Actions runners are typically uid 1001; compose defaults to 1000 otherwise.
@@ -120,12 +124,49 @@ DICT_SRC="$(find "$FPRIME_REF_DIR/build-artifacts" -name '*Dictionary.json' -pri
 BIN_SRC="$(find "$FPRIME_REF_DIR/build-artifacts" -type f \( -name 'YamcsDeployment' -o -name 'FprimeYamcsReference_YamcsDeployment' \) -path '*/bin/*' -print -quit)"
 test -n "$DICT_SRC" && test -f "$DICT_SRC"
 test -n "$BIN_SRC" && test -x "$BIN_SRC"
-cp "$DICT_SRC" "$BUNDLE_DIR/fprime-dictionary.json"
+cp "$DICT_SRC" "$BUNDLE_DIR_A/fprime-dictionary.json"
+NATIVE_SCID="$(
+  python3 - <<PY
+import json
+from pathlib import Path
+dictionary = json.loads(Path("$BUNDLE_DIR_A/fprime-dictionary.json").read_text())
+matches = [
+    entry["value"]
+    for entry in dictionary.get("constants", [])
+    if entry.get("qualifiedName") == "ComCfg.SpacecraftId"
+]
+assert len(matches) == 1, matches
+value = matches[0]
+print(int(value, 0) if isinstance(value, str) else int(value))
+PY
+)"
+ENGINEERING_SCID="${ENGINEERING_SCID:-}"
+if [[ -z "$ENGINEERING_SCID" ]]; then
+  if [[ "$NATIVE_SCID" == "67" ]]; then
+    ENGINEERING_SCID=66
+  else
+    ENGINEERING_SCID=67
+  fi
+fi
+python3 - <<PY
+import json
+from pathlib import Path
+src = Path("$BUNDLE_DIR_A/fprime-dictionary.json")
+dest = Path("$BUNDLE_DIR_B/fprime-dictionary.json")
+dictionary = json.loads(src.read_text())
+matches = 0
+for entry in dictionary.get("constants", []):
+    if entry.get("qualifiedName") == "ComCfg.SpacecraftId":
+        entry["value"] = int("$ENGINEERING_SCID")
+        matches += 1
+assert matches == 1
+dest.write_text(json.dumps(dictionary))
+PY
 FRAME_LENGTH="$(
   python3 - <<PY
 import json
 from pathlib import Path
-dictionary = json.loads(Path("$BUNDLE_DIR/fprime-dictionary.json").read_text())
+dictionary = json.loads(Path("$BUNDLE_DIR_A/fprime-dictionary.json").read_text())
 matches = [
     entry["value"]
     for entry in dictionary.get("constants", [])
@@ -138,12 +179,16 @@ PY
 log "dictionary: $DICT_SRC"
 log "binary: $BIN_SRC"
 log "frame length: $FRAME_LENGTH"
+log "$YAMCS_INSTANCE SCID $NATIVE_SCID; $YAMCS_INSTANCE_B SCID $ENGINEERING_SCID"
 
 log "preparing server + client environments"
 cat >"$DEPLOYMENTS_FILE" <<EOF
 [[deployment]]
 name = "$YAMCS_INSTANCE"
-input_dir = "$BUNDLE_DIR"
+input_dir = "$BUNDLE_DIR_A"
+[[deployment]]
+name = "$YAMCS_INSTANCE_B"
+input_dir = "$BUNDLE_DIR_B"
 EOF
 (
   cd "$ROOT/server"
@@ -166,17 +211,23 @@ log "starting Yamcs + Grafana (uid=$YAMCS_UID gid=$YAMCS_GID)"
   docker compose -f compose.yaml -f runtime/compose.udp.yaml up -d yamcs grafana
 )
 "$ROOT/server/.venv/bin/python" - <<PY
-from proves_yamcs.supervisor import wait_until_grafana_ready, wait_until_ready
-wait_until_ready("$YAMCS_URL", "$YAMCS_INSTANCE", 180)
+from proves_yamcs.supervisor import wait_until_grafana_ready, wait_until_instances_ready
+wait_until_instances_ready("$YAMCS_URL", ["$YAMCS_INSTANCE", "$YAMCS_INSTANCE_B"], 180)
 wait_until_grafana_ready("$GRAFANA_URL", 180)
 PY
 
-log "starting event bridge"
+log "starting event bridges"
 "$ROOT/server/.venv/bin/fprime-yamcs-events" \
   --yamcs-url "$YAMCS_URL" \
   --instance "$YAMCS_INSTANCE" \
-  --dictionary "$BUNDLE_DIR/fprime-dictionary.json" \
-  >"$LOG_DIR/events.log" 2>&1 &
+  --dictionary "$BUNDLE_DIR_A/fprime-dictionary.json" \
+  >"$LOG_DIR/events-$YAMCS_INSTANCE.log" 2>&1 &
+PIDS+=($!)
+"$ROOT/server/.venv/bin/fprime-yamcs-events" \
+  --yamcs-url "$YAMCS_URL" \
+  --instance "$YAMCS_INSTANCE_B" \
+  --dictionary "$BUNDLE_DIR_B/fprime-dictionary.json" \
+  >"$LOG_DIR/events-$YAMCS_INSTANCE_B.log" 2>&1 &
 PIDS+=($!)
 
 log "starting gateway"
@@ -189,16 +240,20 @@ PIDS+=($!)
 log "starting UDP/TCP bridge"
 # TC frames are variable-length CCSDS; the bridge reassembles them from the
 # TCP stream via the TC header length field (do not pass TM frame length).
+# The reference F´ binary is compiled with one SCID; the second process is
+# presented as a distinct deployment by rewriting the CCSDS spacecraft ID.
 python3 "$ROOT/sim/udp_tcp_bridge.py" \
   --tcp-port "$BRIDGE_TCP_PORT" \
-  --fprime-tm-port "$FPRIME_UDP_PORT" \
-  --fprime-tc-host 127.0.0.1 \
-  --fprime-tc-port $((FPRIME_UDP_PORT + 1)) \
+  --native-scid "$NATIVE_SCID" \
+  --spacecraft "$FPRIME_UDP_PORT:$((FPRIME_UDP_PORT + 1))" \
+  --spacecraft "$FPRIME_UDP_PORT_B:$((FPRIME_UDP_PORT_B + 1)):$ENGINEERING_SCID" \
   >"$LOG_DIR/bridge.log" 2>&1 &
 PIDS+=($!)
 
-log "starting F´ YamcsDeployment"
-"$BIN_SRC" -a 127.0.0.1 -p "$FPRIME_UDP_PORT" >"$LOG_DIR/fprime.log" 2>&1 &
+log "starting F´ YamcsDeployment ($YAMCS_INSTANCE on :$FPRIME_UDP_PORT, $YAMCS_INSTANCE_B on :$FPRIME_UDP_PORT_B)"
+"$BIN_SRC" -a 127.0.0.1 -p "$FPRIME_UDP_PORT" >"$LOG_DIR/fprime-$YAMCS_INSTANCE.log" 2>&1 &
+PIDS+=($!)
+"$BIN_SRC" -a 127.0.0.1 -p "$FPRIME_UDP_PORT_B" >"$LOG_DIR/fprime-$YAMCS_INSTANCE_B.log" 2>&1 &
 PIDS+=($!)
 sleep 2
 
@@ -216,9 +271,15 @@ heartbeat_interval = 2.0
 
 [[satellite]]
 name = "$YAMCS_INSTANCE"
-input_dir = "$BUNDLE_DIR"
+input_dir = "$BUNDLE_DIR_A"
 skip_auth = true
-sequence_number_file = "$WORK/client-sequence"
+sequence_number_file = "$WORK/client-sequence-$YAMCS_INSTANCE"
+
+[[satellite]]
+name = "$YAMCS_INSTANCE_B"
+input_dir = "$BUNDLE_DIR_B"
+skip_auth = true
+sequence_number_file = "$WORK/client-sequence-$YAMCS_INSTANCE_B"
 EOF
 "$ROOT/client/.venv/bin/proves-gs-client" \
   --config "$CLIENT_CONFIG" \
@@ -246,14 +307,22 @@ PY
 
 if [[ "$SKIP_TEST" != "1" ]]; then
   log "running CMD_NO_OP round-trip test"
-  set +e
-  (
-    cd "$ROOT/server"
-    YAMCS_URL="$YAMCS_URL" YAMCS_INSTANCE="$YAMCS_INSTANCE" \
-      .venv/bin/pytest tests/integration -q
-  )
-  test_status=$?
-  set -e
+  test_status=0
+  for instance in "$YAMCS_INSTANCE" "$YAMCS_INSTANCE_B"; do
+    log "CMD_NO_OP on $instance"
+    set +e
+    (
+      cd "$ROOT/server"
+      YAMCS_URL="$YAMCS_URL" YAMCS_INSTANCE="$instance" \
+        .venv/bin/pytest tests/integration -q
+    )
+    instance_status=$?
+    set -e
+    if [[ "$instance_status" -ne 0 ]]; then
+      test_status=$instance_status
+      log "round-trip test failed for $instance"
+    fi
+  done
   if [[ "$test_status" -ne 0 ]]; then
     if [[ "$KEEP_ALIVE" == "1" ]]; then
       log "round-trip test failed; leaving the stack up for inspection"
@@ -267,10 +336,11 @@ fi
 
 if [[ "$KEEP_ALIVE" == "1" ]]; then
   log "simulated stack is running (Ctrl+C to stop)"
-  log "  Yamcs UI:    $YAMCS_URL"
-  log "  Grafana:     $GRAFANA_URL  (PROVES Yamcs Overview)"
+  log "  Yamcs UI:    $YAMCS_URL  (instances $YAMCS_INSTANCE / $YAMCS_INSTANCE_B)"
+  log "  Grafana:     $GRAFANA_URL  (folders $YAMCS_INSTANCE / $YAMCS_INSTANCE_B)"
   log "  Gateway UI:  http://127.0.0.1:8091"
-  log "  F´ TM/TC:    UDP :$FPRIME_UDP_PORT / :$((FPRIME_UDP_PORT + 1))"
+  log "  F´ $YAMCS_INSTANCE:     UDP :$FPRIME_UDP_PORT / :$((FPRIME_UDP_PORT + 1)) SCID $NATIVE_SCID"
+  log "  F´ $YAMCS_INSTANCE_B: UDP :$FPRIME_UDP_PORT_B / :$((FPRIME_UDP_PORT_B + 1)) SCID $ENGINEERING_SCID"
   while true; do
     for pid in "${PIDS[@]}"; do
       if ! kill -0 "$pid" 2>/dev/null; then
