@@ -64,10 +64,11 @@ def test_extract_rejects_short_tc_frame():
         extract_space_packet(b"short")
 
 
-def test_client_parser_defaults_to_gateway_tm_port():
-    args = build_parser().parse_args([])
-    assert args.server_tm_port == 51000
-    assert args.mode == "serial"
+def test_client_parser_defaults_and_skip_auth():
+    parser = build_parser()
+    assert parser.parse_args([]).server_tm_port == 51000
+    assert parser.parse_args([]).mode == "serial"
+    assert parser.parse_args(["--skip-auth"]).skip_auth is True
 
 
 def test_authentication_known_vector_and_persistent_sequence(tmp_path):

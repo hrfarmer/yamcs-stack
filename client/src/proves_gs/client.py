@@ -188,19 +188,33 @@ def _forward_tm_tcp(
             stats["tm_frames"] += 1
 
 
+def wrap_tc_passthrough(
+    tc_transfer_frame: bytes,
+    data_link_framer: SpaceDataLinkFramerDeframer,
+) -> bytes:
+    """Space-data-link wrap without PROVES HMAC (stock ComCcsds F´)."""
+    space_packet = extract_space_packet(tc_transfer_frame)
+    fix_ccsds_primary_header(space_packet)
+    return data_link_framer.frame(bytes(space_packet))
+
+
 def _forward_tc(
     tc_socket: socket.socket,
     writer,
-    auth_framer: AuthenticateFramer,
+    auth_framer: AuthenticateFramer | None,
     data_link_framer: SpaceDataLinkFramerDeframer,
     transport: str,
     stats: dict[str, int],
 ) -> None:
-    print(f"[TC] UDP -> authenticate -> TC frame -> {transport}")
+    mode = "authenticate" if auth_framer is not None else "passthrough"
+    print(f"[TC] UDP -> {mode} -> TC frame -> {transport}")
     while True:
         transfer_frame, _ = tc_socket.recvfrom(4096)
         try:
-            output = wrap_tc(transfer_frame, auth_framer, data_link_framer)
+            if auth_framer is None:
+                output = wrap_tc_passthrough(transfer_frame, data_link_framer)
+            else:
+                output = wrap_tc(transfer_frame, auth_framer, data_link_framer)
         except ValueError as exc:
             print(f"[TC] dropping malformed frame: {exc}")
             continue
@@ -223,7 +237,7 @@ def _heartbeat_loop(
 ) -> None:
     endpoint = f"{api_url.rstrip('/')}/api/stations/{station_name}/heartbeat"
     print(f"[register] heartbeating to {endpoint} every {interval:.0f}s")
-    while not stop.wait(interval):
+    while True:
         payload = json.dumps(
             {
                 "tc_host": tc_host,
@@ -243,6 +257,8 @@ def _heartbeat_loop(
                 response.read()
         except (OSError, urllib.error.URLError) as exc:
             print(f"[register] heartbeat failed: {exc}")
+        if stop.wait(interval):
+            return
 
 
 def _detect_tc_host(explicit: str | None, server_host: str) -> str:
@@ -325,6 +341,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--spacecraft-id", type=_spacecraft_ids, action="append")
     parser.add_argument("--vc-id", type=int, default=1)
     parser.add_argument("--spi", type=int, default=0)
+    parser.add_argument(
+        "--skip-auth",
+        action="store_true",
+        help="omit PROVES HMAC (for stock F´ ComCcsds deployments in simulation)",
+    )
     return parser
 
 
@@ -343,21 +364,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    bundle = load_bundle(args.input_dir)
+    bundle = load_bundle(args.input_dir, require_auth_key=not args.skip_auth)
     spacecraft_ids = (
         [item for group in args.spacecraft_id for item in group]
         if args.spacecraft_id
         else [bundle.spacecraft_id]
     )
     frame_length = args.frame_length or bundle.frame_length
-    auth_key = args.auth_key
-    if auth_key is None:
+    auth_framer: AuthenticateFramer | None
+    if args.skip_auth:
+        auth_framer = None
+        print("[client] PROVES HMAC authentication disabled (--skip-auth)")
+    elif args.auth_key is not None:
+        auth_framer = AuthenticateFramer(
+            args.auth_key, args.sequence_number_file, args.spi
+        )
+    else:
         key_file = args.auth_key_file or bundle.auth_key_path
+        if key_file is None:
+            raise SystemExit("authentication key file is required unless --skip-auth")
         auth_framer = AuthenticateFramer.from_key_file(
             key_file, args.sequence_number_file, args.spi
         )
-    else:
-        auth_framer = AuthenticateFramer(auth_key, args.sequence_number_file, args.spi)
 
     data_link_framer = SpaceDataLinkFramerDeframer(
         scid=spacecraft_ids[0], vcid=args.vc_id, frame_size=frame_length

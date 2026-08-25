@@ -66,7 +66,7 @@ streamConfig:
   tm:
     - name: "tm_realtime"
       processor: "realtime"
-      rootContainer: "/ReferenceDeployment_ReferenceDeployment/CCSDSSpacePacket"
+      rootContainer: "@TM_ROOT_CONTAINER@"
     - name: "tm_dump"
   cmdHist: ["cmdhist_realtime", "cmdhist_dump"]
   event: ["events_realtime", "events_dump"]

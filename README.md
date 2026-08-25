@@ -38,3 +38,13 @@ UART_DEVICE=/dev/ttyUSB0 SERVER_HOST=<yamcs-tailscale-name> STATION_NAME=gs-lab 
 
 Open Yamcs at `http://<server>:8090` and the ground-station panel at
 `http://<server>:8091`.
+
+## Simulated full-stack CI / local e2e
+
+```sh
+./scripts/run_e2e_sim.sh
+```
+
+Builds [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference),
+runs F´ + UDP/TCP bridge + GS client + Yamcs gateway, and asserts a `CMD_NO_OP`
+round-trip. See [`sim/README.md`](sim/README.md).
