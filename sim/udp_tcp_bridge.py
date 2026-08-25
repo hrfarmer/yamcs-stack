@@ -2,8 +2,10 @@
 """Bridge F´ Drv.Udp CCSDS frames to the GS client's TCP bent-pipe.
 
 F´ with ``-a HOST -p PORT`` sends TM to HOST:PORT and receives TC on HOST:PORT+1.
-The GS client connects as a TCP client and expects a bidirectional byte stream of
-fixed-length CCSDS frames. This process joins those two transports.
+The GS client connects as a TCP client and expects a bidirectional byte stream.
+TM frames from F´ are fixed-length and forwarded as-is. TC frames from the GS
+client are variable-length CCSDS TC transfer frames; this process reassembles
+them from the TCP stream using the length field in the TC primary header.
 """
 
 from __future__ import annotations
@@ -15,6 +17,38 @@ import sys
 
 sys.stdout.reconfigure(line_buffering=True)
 
+TC_HEADER_SIZE = 5
+
+
+def ccsds_tc_frame_length(buffer: bytes | bytearray) -> int | None:
+    """Return total TC frame length from a CCSDS TC header, or None if incomplete.
+
+    The TC primary header encodes frame length as (total octets - 1) in the low
+    10 bits of bytes 2-3 (VCID occupies the high 6 bits of byte 2).
+    """
+    if len(buffer) < 4:
+        return None
+    length_minus_one = ((buffer[2] & 0x03) << 8) | buffer[3]
+    return length_minus_one + 1
+
+
+def pop_tc_frames(buffer: bytearray) -> list[bytes]:
+    """Extract complete CCSDS TC frames from a TCP reassembly buffer."""
+    frames: list[bytes] = []
+    while True:
+        total = ccsds_tc_frame_length(buffer)
+        if total is None:
+            break
+        if total < TC_HEADER_SIZE + 2:
+            # Corrupt length; drop one byte and resync.
+            del buffer[0:1]
+            continue
+        if len(buffer) < total:
+            break
+        frames.append(bytes(buffer[:total]))
+        del buffer[:total]
+    return frames
+
 
 def _serve(
     tcp_host: str,
@@ -22,7 +56,6 @@ def _serve(
     fprime_tm_port: int,
     fprime_tc_host: str,
     fprime_tc_port: int,
-    tc_frame_length: int | None,
 ) -> None:
     tcp_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcp_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -58,14 +91,13 @@ def _serve(
                         data = client.recv(65535)
                         if not data:
                             raise ConnectionError("GS client disconnected")
-                        if tc_frame_length is None:
-                            tc_sock.sendto(data, (fprime_tc_host, fprime_tc_port))
-                            continue
                         tc_buffer.extend(data)
-                        while len(tc_buffer) >= tc_frame_length:
-                            frame = bytes(tc_buffer[:tc_frame_length])
-                            del tc_buffer[:tc_frame_length]
+                        for frame in pop_tc_frames(tc_buffer):
                             tc_sock.sendto(frame, (fprime_tc_host, fprime_tc_port))
+                            print(
+                                f"[bridge] TC {len(frame)} bytes -> "
+                                f"{fprime_tc_host}:{fprime_tc_port}"
+                            )
         except (OSError, ConnectionError) as exc:
             print(f"[bridge] session ended: {exc}")
         finally:
@@ -97,12 +129,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=52001,
         help="UDP port F´ configureRecv uses (typically -p + 1)",
     )
-    parser.add_argument(
-        "--tc-frame-length",
-        type=int,
-        default=None,
-        help="if set, split GS-client TCP TC stream into fixed-length UDP datagrams",
-    )
     return parser
 
 
@@ -115,7 +141,6 @@ def main(argv: list[str] | None = None) -> int:
             args.fprime_tm_port,
             args.fprime_tc_host,
             args.fprime_tc_port,
-            args.tc_frame_length,
         )
     except KeyboardInterrupt:
         print("[bridge] interrupted")
