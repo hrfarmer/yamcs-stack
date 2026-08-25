@@ -1,13 +1,5 @@
 # Set up the PROVES Yamcs stack
 
-This walkthrough is for someone who has not used this repository before. It
-gets a **central server** running and then connects one or more **ground
-stations** so you can see telemetry and send telecommands.
-
-You do not need to know Yamcs, F Prime, or CCSDS internals to follow the
-steps. Commands are written for Linux. Run them from the package directory
-they mention (`server/` or `client/`).
-
 ## What you are setting up
 
 The stack is two programs that talk to each other:
