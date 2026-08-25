@@ -79,6 +79,14 @@ require_cmd git
 require_cmd python3
 require_cmd docker
 docker compose version >/dev/null
+# Prefer GNU gcc/g++ over a clang `/usr/bin/c++` that may select a GCC dir
+# without libstdc++ (seen on Cursor Cloud images).
+export CC="${CC:-$(command -v gcc-13 || command -v gcc || true)}"
+export CXX="${CXX:-$(command -v g++-13 || command -v g++ || true)}"
+if [[ -z "${CXX}" ]]; then
+  echo "missing C++ compiler (g++)" >&2
+  exit 1
+fi
 
 if [[ ! -d "$FPRIME_REF_DIR/.git" ]]; then
   log "cloning $FPRIME_REF_URL ($FPRIME_REF_REF)"

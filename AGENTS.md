@@ -59,8 +59,9 @@ Notes below cover only non-obvious setup/run caveats.
   script builds `fprime-yamcs-reference` in C++), so they will not pass against a
   bare Yamcs boot.
 - To exercise Yamcs + Grafana + the gateway without a PROVES board, run
-  `./scripts/run_test_sim.sh` (needs `git`, `docker`, `python3`, a C++ toolchain,
-  and `cmake`). It is the e2e sim kept alive until Ctrl+C.
+  `./scripts/run_test_sim.sh` (needs `git`, `docker`, `python3` + `python3-venv`,
+  GNU `g++`/`gcc` rather than a clang `/usr/bin/c++`, and `cmake`). It is the
+  e2e sim kept alive until Ctrl+C.
 - Expected without a ground-station client: the gateway reports `tc_dropped`
   (not `tc_forwarded`) when a telecommand is issued, because no active TX station
   is registered. The command still traverses Yamcs → `UDP_TC_OUT` → gateway.
