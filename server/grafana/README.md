@@ -15,4 +15,5 @@ Grafana runs next to Yamcs in `compose.yaml` and is provisioned with the
 
 The plugin talks to Yamcs from inside the Grafana container, so the provisioned
 host path is the Compose service name `yamcs:8090`, not `localhost:8090`.
-Generated files live in `runtime/grafana/` (datasources + dashboard folders).
+Generated files live in `runtime/grafana/` (the complete Grafana provisioning
+tree Compose mounts at `/etc/grafana/provisioning`).

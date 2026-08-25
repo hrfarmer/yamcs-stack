@@ -1,7 +1,7 @@
 # Extra dashboards per F´ deployment
 
 `make prepare` copies every `templates/*.json` layout into a Grafana folder
-named after the deployment (`runtime/grafana/dashboards/<name>/`). Drop
+named after the deployment (`runtime/grafana/dashboards/json/<name>/`). Drop
 additional JSON files here to attach extra layouts to one satellite without
 changing the shared templates:
 

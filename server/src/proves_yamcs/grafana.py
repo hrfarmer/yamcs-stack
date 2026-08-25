@@ -111,10 +111,31 @@ def _write_dashboard(source: Path, destination: Path, mapping: dict[str, str]) -
     _atomic_text(destination, json.dumps(payload, indent=2) + "\n")
 
 
-def _clear_generated_dashboards(dashboards_dir: Path) -> None:
-    if dashboards_dir.is_dir():
-        shutil.rmtree(dashboards_dir)
-    dashboards_dir.mkdir(parents=True, exist_ok=True)
+def _clear_generated_dashboards(dashboards_json_dir: Path) -> None:
+    if dashboards_json_dir.is_dir():
+        shutil.rmtree(dashboards_json_dir)
+    dashboards_json_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _copy_static_provisioning(grafana_dir: Path, grafana_runtime: Path) -> None:
+    """Copy plugin/alerting/provider YAML into the generated provisioning tree."""
+    source = grafana_dir / "provisioning"
+    for name in ("plugins", "alerting"):
+        src = source / name
+        dest = grafana_runtime / name
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        if src.is_dir():
+            shutil.copytree(src, dest)
+    provider = source / "dashboards" / "dashboards.yaml"
+    if not provider.is_file():
+        raise DeploymentError(f"Grafana dashboard provider not found: {provider}")
+    destination = grafana_runtime / "dashboards" / "dashboards.yaml"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(provider, destination)
 
 
 def render_grafana(
@@ -122,7 +143,7 @@ def render_grafana(
     grafana_dir: Path,
     runtime_dir: Path,
 ) -> Path:
-    """Write datasource endpoints and per-deployment dashboard folders."""
+    """Write a complete Grafana provisioning tree for Compose to mount."""
     if not deployments:
         raise DeploymentError("at least one deployment is required")
     templates_dir = grafana_dir / "templates"
@@ -133,14 +154,25 @@ def render_grafana(
         raise DeploymentError(f"no Grafana dashboard templates in {templates_dir}")
 
     grafana_runtime = runtime_dir / "grafana"
-    datasources_dir = grafana_runtime / "datasources"
     dashboards_dir = grafana_runtime / "dashboards"
-    _clear_generated_dashboards(dashboards_dir)
-    _atomic_text(datasources_dir / "yamcs.yaml", render_datasource_yaml(deployments))
+    json_dir = dashboards_dir / "json"
+    _copy_static_provisioning(grafana_dir, grafana_runtime)
+    _clear_generated_dashboards(json_dir)
+    for leftover in dashboards_dir.iterdir():
+        if leftover.name in {"json", "dashboards.yaml"}:
+            continue
+        if leftover.is_dir():
+            shutil.rmtree(leftover)
+        else:
+            leftover.unlink()
+    _atomic_text(
+        grafana_runtime / "datasources" / "yamcs.yaml",
+        render_datasource_yaml(deployments),
+    )
 
     extras_root = grafana_dir / "dashboards"
     for item in deployments:
-        folder = dashboards_dir / item.name
+        folder = json_dir / item.name
         folder.mkdir(parents=True, exist_ok=True)
         for template in templates:
             mapping = placeholders(item, stem=template.stem)
@@ -151,9 +183,9 @@ def render_grafana(
                 mapping = placeholders(item, stem=extra.stem)
                 _write_dashboard(extra, folder / extra.name, mapping)
 
-    home_source = dashboards_dir / deployments[0].name / "overview.json"
+    home_source = json_dir / deployments[0].name / "overview.json"
     if not home_source.is_file():
-        generated = sorted((dashboards_dir / deployments[0].name).glob("*.json"))
+        generated = sorted((json_dir / deployments[0].name).glob("*.json"))
         if not generated:
             raise DeploymentError("Grafana rendering produced no dashboards")
         home_source = generated[0]

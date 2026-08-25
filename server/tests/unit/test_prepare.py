@@ -75,7 +75,7 @@ def test_render_configuration_substitutes_all_dynamic_values(tmp_path):
     )
     assert '"proves-flight_realtime"' in datasource
     overview = json.loads(
-        (runtime / "grafana/dashboards/proves-flight/overview.json").read_text(
+        (runtime / "grafana/dashboards/json/proves-flight/overview.json").read_text(
             encoding="utf-8"
         )
     )
@@ -110,10 +110,12 @@ def test_render_configuration_writes_two_instances(tmp_path):
     assert '"sat-a_realtime"' in datasource
     assert '"sat-b_replay"' in datasource
     sat_a = json.loads(
-        (runtime / "grafana/dashboards/sat-a/overview.json").read_text(encoding="utf-8")
+        (runtime / "grafana/dashboards/json/sat-a/overview.json").read_text(
+            encoding="utf-8"
+        )
     )
     sat_b = json.loads(
-        (runtime / "grafana/dashboards/sat-b/commanding.json").read_text(
+        (runtime / "grafana/dashboards/json/sat-b/commanding.json").read_text(
             encoding="utf-8"
         )
     )
@@ -178,12 +180,18 @@ def test_prepare_two_deployments(tmp_path):
     assert "/CCSDSSpacePacket" in sat_a
     assert "/CCSDSSpacePacket" in sat_b
     grafana_a = json.loads(
-        (runtime / "grafana/dashboards/sat-a/overview.json").read_text(encoding="utf-8")
+        (runtime / "grafana/dashboards/json/sat-a/overview.json").read_text(
+            encoding="utf-8"
+        )
     )
     grafana_b = json.loads(
-        (runtime / "grafana/dashboards/sat-b/overview.json").read_text(encoding="utf-8")
+        (runtime / "grafana/dashboards/json/sat-b/overview.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert grafana_a["title"] == "sat-a Overview"
     assert grafana_b["title"] == "sat-b Overview"
-    assert (runtime / "grafana/dashboards/sat-a/commanding.json").is_file()
-    assert (runtime / "grafana/dashboards/sat-b/commanding.json").is_file()
+    assert (runtime / "grafana/dashboards/json/sat-a/commanding.json").is_file()
+    assert (runtime / "grafana/dashboards/json/sat-b/commanding.json").is_file()
+    assert (runtime / "grafana/dashboards/dashboards.yaml").is_file()
+    assert (runtime / "grafana/plugins/apps.yaml").is_file()

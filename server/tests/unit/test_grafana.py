@@ -17,6 +17,11 @@ def test_render_grafana_copies_extra_layout_into_deployment_folder(tmp_path: Pat
     extras = grafana_dir / "dashboards" / "sat-a"
     templates.mkdir(parents=True)
     extras.mkdir(parents=True)
+    provider = grafana_dir / "provisioning" / "dashboards"
+    provider.mkdir(parents=True)
+    (provider / "dashboards.yaml").write_text("apiVersion: 1\n", encoding="utf-8")
+    (grafana_dir / "provisioning" / "plugins").mkdir()
+    (grafana_dir / "provisioning" / "alerting").mkdir()
     (templates / "overview.json").write_text(
         json.dumps(
             {
@@ -44,13 +49,14 @@ def test_render_grafana_copies_extra_layout_into_deployment_folder(tmp_path: Pat
     ]
     output = render_grafana(deployments, grafana_dir, runtime)
     payload = json.loads(
-        (output / "dashboards/sat-a/payload.json").read_text(encoding="utf-8")
+        (output / "dashboards/json/sat-a/payload.json").read_text(encoding="utf-8")
     )
     assert payload["uid"] == "yamcs-sat-a-payload"
     assert payload["title"] == "sat-a Payload"
     assert payload["endpoint"] == "sat-a_realtime"
-    assert not (output / "dashboards/sat-b/payload.json").is_file()
+    assert not (output / "dashboards/json/sat-b/payload.json").is_file()
     datasource = (output / "datasources/yamcs.yaml").read_text(encoding="utf-8")
     assert '"sat-a_realtime"' in datasource
     assert '"sat-b_replay"' in datasource
     assert (output / "home.json").is_file()
+    assert (output / "dashboards/dashboards.yaml").is_file()

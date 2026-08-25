@@ -43,9 +43,9 @@ services:
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./runtime/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./runtime/grafana/dashboards:/etc/grafana/provisioning/dashboards/json:ro
+      # Single bind: nested mounts under this path fail on GitHub Actions
+      # (mkdirat into a read-only parent). prepare generates the full tree.
+      - ./runtime/grafana:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q ok"]
