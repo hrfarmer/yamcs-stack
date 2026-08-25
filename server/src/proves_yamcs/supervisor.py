@@ -323,6 +323,28 @@ def check_server(args: argparse.Namespace) -> int:
             for item in datasources
         ):
             raise RuntimeError("Grafana did not provision the JAOPS Yamcs datasource")
+        search = _http_json(f"{args.grafana_url.rstrip('/')}/api/search?type=dash-db")
+        if not isinstance(search, list):
+            raise RuntimeError("Grafana dashboard search returned an invalid response")
+        by_folder: dict[str, set[str]] = {}
+        for entry in search:
+            if not isinstance(entry, dict):
+                continue
+            folder = str(entry.get("folderTitle") or "")
+            title = str(entry.get("title") or "")
+            by_folder.setdefault(folder, set()).add(title)
+        for item in manifest.deployments:
+            titles = by_folder.get(item.name, set())
+            missing = [
+                name
+                for name in (f"{item.name} Overview", f"{item.name} Commanding")
+                if name not in titles
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"Grafana folder {item.name!r} is missing dashboards: "
+                    f"{', '.join(missing)}"
+                )
         print(f"Yamcs {server['yamcsVersion']} + Grafana build check passed")
         return 0
     finally:

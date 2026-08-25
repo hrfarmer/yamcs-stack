@@ -1,0 +1,101 @@
+{
+  "uid": "__DASHBOARD_UID__",
+  "title": "__DEPLOYMENT__ Commanding",
+  "description": "Command history and events for F´ deployment __DEPLOYMENT__ (SCID __SCID__).",
+  "tags": ["yamcs", "proves", "jaops", "commanding", "__DEPLOYMENT__"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "liveNow": true,
+  "editable": true,
+  "graphTooltip": 1,
+  "fiscalYearStartMonth": 0,
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 100,
+      "type": "text",
+      "title": "Deployment",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "Commanding layout for **__DEPLOYMENT__** · Yamcs instance `__INSTANCE__` · SCID **__SCID__** · realtime endpoint `__ENDPOINT__`"
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Commands sent",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 3 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/cmdQueue/default/numSentCommands",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 2,
+      "type": "jaops-commandhistory-panel",
+      "title": "Command history",
+      "gridPos": { "h": 12, "w": 12, "x": 0, "y": 11 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "command-history",
+          "endpoint": "__ENDPOINT__"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showArguments": true, "pagination": true, "pageSize": 25 }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Events",
+      "gridPos": { "h": 12, "w": 12, "x": 12, "y": 11 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "events",
+          "endpoint": "__ENDPOINT__"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } }
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 {
-  "uid": "proves-yamcs-overview",
-  "title": "PROVES Yamcs Overview",
-  "description": "Live Yamcs link rates, JVM, commanding, events, and alarms via the JAOPS Yamcs plugin.",
-  "tags": ["yamcs", "proves", "jaops"],
+  "uid": "__DASHBOARD_UID__",
+  "title": "__DEPLOYMENT__ Overview",
+  "description": "Live Yamcs link rates, JVM, and events for F´ deployment __DEPLOYMENT__ (SCID __SCID__).",
+  "tags": ["yamcs", "proves", "jaops", "__DEPLOYMENT__"],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
@@ -18,18 +18,28 @@
   "links": [],
   "panels": [
     {
+      "id": 100,
+      "type": "text",
+      "title": "Deployment",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "F´ deployment **__DEPLOYMENT__** · Yamcs instance `__INSTANCE__` · SCID **__SCID__** · TM UDP **:__TM_PORT__** · realtime endpoint `__ENDPOINT__`"
+      }
+    },
+    {
       "id": 1,
       "type": "timeseries",
       "title": "TM ingest rate",
       "description": "Bytes per second into UDP_TM_IN (gateway → Yamcs).",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/links/UDP_TM_IN/dataInRate",
           "asVariable": false
         }
@@ -59,14 +69,14 @@
       "type": "timeseries",
       "title": "TC outbound rate",
       "description": "Bytes per second out of UDP_TC_OUT (Yamcs → gateway).",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/links/UDP_TC_OUT/dataOutRate",
           "asVariable": false
         }
@@ -95,14 +105,14 @@
       "id": 3,
       "type": "timeseries",
       "title": "TM frames received",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/links/UDP_TM_IN/dataInCount",
           "asVariable": false
         }
@@ -131,14 +141,14 @@
       "id": 4,
       "type": "timeseries",
       "title": "Commands sent",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/cmdQueue/default/numSentCommands",
           "asVariable": false
         }
@@ -167,14 +177,14 @@
       "id": 5,
       "type": "timeseries",
       "title": "Yamcs JVM memory",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/jvm/memoryUsed",
           "asVariable": false
         },
@@ -182,7 +192,7 @@
           "refId": "B",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/jvm/totalMemory",
           "asVariable": false
         }
@@ -211,14 +221,14 @@
       "id": 6,
       "type": "timeseries",
       "title": "Yamcs JVM threads",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "proves-flight_realtime",
+          "endpoint": "__ENDPOINT__",
           "parameter": "/yamcs/proves-central/jvm/threadCount",
           "asVariable": false
         }
@@ -244,34 +254,17 @@
       }
     },
     {
-      "id": 7,
-      "type": "jaops-commandhistory-panel",
-      "title": "Command history",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 24 },
-      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
-          "type": "command-history",
-          "endpoint": "proves-flight_realtime"
-        }
-      ],
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "options": { "showArguments": true, "pagination": true, "pageSize": 25 }
-    },
-    {
       "id": 8,
       "type": "table",
       "title": "Events",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 24 },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 27 },
       "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "events",
-          "endpoint": "proves-flight_realtime"
+          "endpoint": "__ENDPOINT__"
         }
       ],
       "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },

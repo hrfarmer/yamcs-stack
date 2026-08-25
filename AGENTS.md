@@ -53,14 +53,16 @@ Notes below cover only non-obvious setup/run caveats.
   in the foreground as a supervisor; stop it with `make yamcs-stop`. Yamcs web
   UI is `http://localhost:8090` (no auth in dev; instance selector picks the
   satellite), Grafana `http://localhost:3000` (anonymous Admin, JAOPS Yamcs
-  plugin, home dashboard **PROVES Yamcs Overview**), gateway UI
+  plugin, one folder per F´ deployment), gateway UI
   `http://localhost:8091`.
 - Because there is no committed flight dictionary, always pass
   `DEPLOYMENTS=tests/fixtures/deployments.toml` to `make prepare` / `make yamcs*`
   targets (matches CI); the default `config/deployments.toml` points at
   `inputs/proves`, which is empty in this repo.
 - Each `[[deployment]]` in the TOML becomes one Yamcs instance (own XTCE, SCID,
-  TM UDP port). The gateway routes TM by CCSDS spacecraft ID.
+  TM UDP port) and one Grafana folder (Overview + Commanding layouts, plus any
+  extra JSON under `server/grafana/dashboards/<name>/`). The gateway routes TM
+  by CCSDS spacecraft ID.
 - `make test` runs unit tests only (`tests/unit`). The server `tests/integration`
   suite and `scripts/run_e2e_sim.sh` require a live/simulated spacecraft (the e2e
   script builds `fprime-yamcs-reference` in C++), so they will not pass against a
@@ -68,7 +70,9 @@ Notes below cover only non-obvious setup/run caveats.
 - To exercise Yamcs + Grafana + the gateway without a PROVES board, run
   `./scripts/run_test_sim.sh` (needs `git`, `docker`, `python3` + `python3-venv`,
   GNU `g++`/`gcc` rather than a clang `/usr/bin/c++`, and `cmake`). It is the
-  e2e sim kept alive until Ctrl+C.
+  e2e sim kept alive until Ctrl+C, with two example F´ deployments
+  (`proves-flight` and `proves-engineering`) so Yamcs instance switching and
+  per-deployment Grafana folders can be exercised locally.
 - Expected without a ground-station client: the gateway reports `tc_dropped`
   (not `tc_forwarded`) when a telecommand is issued, because no active TX station
   is registered. The command still traverses Yamcs → `UDP_TC_OUT` → gateway.

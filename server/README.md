@@ -43,7 +43,7 @@ make yamcs DEPLOYMENTS=tests/fixtures/deployments.toml
 ```
 
 Web UI: <http://localhost:8090>  
-Grafana: <http://localhost:3000> (JAOPS Yamcs plugin; anonymous Admin)  
+Grafana: <http://localhost:3000> (JAOPS Yamcs plugin; one folder per deployment)  
 Ground stations: <http://localhost:8091>
 
 Stop with `make yamcs-stop`. `make yamcs-server` starts Yamcs and Grafana.

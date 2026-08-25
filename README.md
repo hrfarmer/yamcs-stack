@@ -60,5 +60,6 @@ To leave that same stack running for interactive testing (no PROVES board):
 ./scripts/run_test_sim.sh
 ```
 
-Then open Yamcs (`:8090`) and Grafana (`:3000`, home dashboard **PROVES Yamcs
-Overview**). Ctrl+C stops the stack.
+Then open Yamcs (`:8090`, instance selector for `proves-flight` /
+`proves-engineering`) and Grafana (`:3000`, one folder per deployment with
+Overview and Commanding layouts). Ctrl+C stops the stack.
