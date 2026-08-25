@@ -9,13 +9,15 @@ F´ YamcsDeployment (UDP :52000/:52001)
         ↕
 udp_tcp_bridge.py (TCP :5000)
         ↕
-proves-gs-client --skip-auth
+proves-gs-client --skip-auth (TC listen :51001 on localhost)
         ↕
-gateway (:51000 TM / :50001 TC / :8091)
+gateway (:51000 TM ingest / :50001 Yamcs-TC / :8091)
         ↕
 Yamcs Docker (:8090 / :50000)
 ```
 
+On a real Tailscale GS the client can keep TC on `:50001`; the e2e script uses
+`:51001` so it does not collide with the gateway's Yamcs-TC socket on loopback.
 `--skip-auth` is required because stock ComCcsds does not use the PROVES HMAC
 telecommand wrapper.
 
