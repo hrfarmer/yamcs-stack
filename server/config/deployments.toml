@@ -1,0 +1,12 @@
+# F´ deployments hosted by this Yamcs server.
+# Paths are relative to this file. Copy a dictionary into each input_dir.
+#
+#   mkdir -p inputs/proves-flight
+#   cp /path/to/fprime-dictionary.json inputs/proves-flight/
+#
+# Optional tm_port defaults to 50000 + 2 * index. TC from every instance
+# shares host UDP 50001 (the gateway demultiplexes by spacecraft ID).
+
+[[deployment]]
+name = "proves-flight"
+input_dir = "../inputs/proves"

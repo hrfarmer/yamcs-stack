@@ -1,0 +1,3 @@
+[[deployment]]
+name = "proves-flight"
+input_dir = "proves"

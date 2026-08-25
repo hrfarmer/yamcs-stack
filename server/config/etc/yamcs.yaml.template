@@ -12,10 +12,9 @@ cacheDir: /yamcs-cache
 serverId: proves-central
 
 instances:
-  - fprime-project
+@INSTANCES@
 
 secretKey: "@YAMCS_SECRET_KEY@"
 
 yamcs-web:
   tag: PROVES
-

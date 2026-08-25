@@ -17,11 +17,24 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from proves_yamcs.deployments import (
+    RuntimeDeployment,
+    RuntimeManifest,
+    load_runtime_manifest,
+)
+
 sys.stdout.reconfigure(line_buffering=True)
 
 DEFAULT_STALE_AFTER = 20.0
 DEFAULT_DEDUP_WINDOW = 1.5
 ACTIVE_TX_PARAMETER = "/Ground/ActiveTxStation"
+
+
+def extract_tm_spacecraft_id(frame: bytes) -> int | None:
+    """Return the 10-bit CCSDS TM spacecraft ID, or None if the frame is short."""
+    if len(frame) < 2:
+        return None
+    return ((frame[0] << 8) | frame[1]) >> 4 & 0x3FF
 
 
 @dataclass
@@ -44,6 +57,21 @@ class Station:
             "tc_frames": self.tc_frames,
             "active_tx": active,
             "online": online,
+        }
+
+
+@dataclass
+class DeploymentStats:
+    deployment: RuntimeDeployment
+    tm_accepted: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.deployment.name,
+            "instance": self.deployment.instance,
+            "spacecraft_id": self.deployment.spacecraft_id,
+            "tm_port": self.deployment.tm_port,
+            "tm_accepted": self.tm_accepted,
         }
 
 
@@ -87,16 +115,14 @@ class Gateway:
         self,
         *,
         yamcs_tm_host: str,
-        yamcs_tm_port: int,
+        manifest: RuntimeManifest,
         yamcs_url: str,
-        yamcs_instance: str,
         stale_after: float,
         dedup_window: float,
     ) -> None:
         self.yamcs_tm_host = yamcs_tm_host
-        self.yamcs_tm_port = yamcs_tm_port
+        self.manifest = manifest
         self.yamcs_url = yamcs_url.rstrip("/")
-        self.yamcs_instance = yamcs_instance
         self.stale_after = stale_after
         self.deduper = FrameDeduper(dedup_window)
         self._stations: dict[str, Station] = {}
@@ -104,8 +130,16 @@ class Gateway:
         self._lock = threading.Lock()
         self._tm_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._tc_out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._by_scid = {
+            item.spacecraft_id: DeploymentStats(item) for item in manifest.deployments
+        }
+        self.tm_unknown = 0
         self.tc_forwarded = 0
         self.tc_dropped = 0
+
+    @property
+    def instances(self) -> tuple[str, ...]:
+        return tuple(item.instance for item in self.manifest.deployments)
 
     def heartbeat(
         self,
@@ -166,10 +200,18 @@ class Gateway:
         print(f"[gateway] active TX station -> {name}")
 
     def ingest_tm(self, frame: bytes, source: str) -> None:
+        spacecraft_id = extract_tm_spacecraft_id(frame)
+        stats = self._by_scid.get(spacecraft_id) if spacecraft_id is not None else None
+        if stats is None:
+            with self._lock:
+                self.tm_unknown += 1
+            print(f"[gateway] dropping TM: unknown SCID {spacecraft_id}")
+            return
         if not self.deduper.accept(frame):
             return
-        self._tm_out.sendto(frame, (self.yamcs_tm_host, self.yamcs_tm_port))
+        self._tm_out.sendto(frame, (self.yamcs_tm_host, stats.deployment.tm_port))
         with self._lock:
+            stats.tm_accepted += 1
             for station in self._stations.values():
                 if source in station.source_addrs or source == station.tc_host:
                     station.source_addrs.add(source)
@@ -198,11 +240,17 @@ class Gateway:
         print(f"[gateway] TC {len(frame)} bytes -> {name} {host}:{port}")
 
     def status(self) -> dict[str, Any]:
+        with self._lock:
+            deployments = [item.as_dict() for item in self._by_scid.values()]
+            tm_unknown = self.tm_unknown
+        deployments.sort(key=lambda item: item["name"])
         return {
             "active_tx": self.get_active_tx(),
             "stations": self.list_stations(),
+            "deployments": deployments,
             "tm_accepted": self.deduper.accepted,
             "tm_duplicates": self.deduper.duplicates,
+            "tm_unknown": tm_unknown,
             "tc_forwarded": self.tc_forwarded,
             "tc_dropped": self.tc_dropped,
         }
@@ -211,17 +259,20 @@ class Gateway:
         self, stop: threading.Event, interval: float = 2.0
     ) -> None:
         while not stop.wait(interval):
-            try:
-                value = self._read_yamcs_active_tx()
-            except (OSError, urllib.error.URLError, ValueError, KeyError):
-                continue
-            if not value:
-                continue
-            with self._lock:
-                if value == self._active_tx or value not in self._stations:
+            for instance in self.instances:
+                try:
+                    value = self._read_yamcs_active_tx(instance)
+                except (OSError, urllib.error.URLError, ValueError, KeyError):
                     continue
-                self._active_tx = value
-            print(f"[gateway] active TX station from Yamcs -> {value}")
+                if not value:
+                    continue
+                with self._lock:
+                    if value == self._active_tx or value not in self._stations:
+                        continue
+                    self._active_tx = value
+                    self._push_active_tx_unlocked(value)
+                print(f"[gateway] active TX station from Yamcs -> {value}")
+                break
 
     def _push_active_tx_unlocked(self, name: str) -> None:
         threading.Thread(
@@ -230,29 +281,34 @@ class Gateway:
             daemon=True,
         ).start()
 
-    def _parameter_url(self) -> str:
+    def _parameter_url(self, instance: str) -> str:
         # Yamcs accepts the qualified name as a multi-segment path.
         return (
-            f"{self.yamcs_url}/api/processors/{self.yamcs_instance}/realtime/"
+            f"{self.yamcs_url}/api/processors/{instance}/realtime/"
             f"parameters{ACTIVE_TX_PARAMETER}"
         )
 
     def _set_yamcs_active_tx(self, name: str) -> None:
         payload = json.dumps({"type": "STRING", "stringValue": name}).encode("utf-8")
-        request = urllib.request.Request(
-            self._parameter_url(),
-            data=payload,
-            method="PUT",
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
-                response.read()
-        except (OSError, urllib.error.URLError) as exc:
-            print(f"[gateway] failed to publish ActiveTxStation to Yamcs: {exc}")
+        for instance in self.instances:
+            request = urllib.request.Request(
+                self._parameter_url(instance),
+                data=payload,
+                method="PUT",
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
+                    response.read()
+            except (OSError, urllib.error.URLError) as exc:
+                print(
+                    f"[gateway] failed to publish ActiveTxStation to {instance}: {exc}"
+                )
 
-    def _read_yamcs_active_tx(self) -> str | None:
-        with urllib.request.urlopen(self._parameter_url(), timeout=5) as response:  # noqa: S310
+    def _read_yamcs_active_tx(self, instance: str) -> str | None:
+        with urllib.request.urlopen(  # noqa: S310
+            self._parameter_url(instance), timeout=5
+        ) as response:
             body = json.load(response)
         eng = body.get("engValue") or body.get("rawValue") or {}
         if isinstance(eng, dict):
@@ -276,6 +332,7 @@ INDEX_HTML = """<!DOCTYPE html>
       border-collapse: collapse;
       width: min(720px, 100%);
       background: #fffdf8;
+      margin-bottom: 1.5rem;
     }
     th, td {
       text-align: left;
@@ -290,7 +347,8 @@ INDEX_HTML = """<!DOCTYPE html>
 <body>
   <h1>Ground Stations</h1>
   <p class="meta">Select the TX station used for Yamcs telecommands.
-  Telemetry from all online stations is deduplicated into Yamcs.</p>
+  Telemetry from all online stations is routed by spacecraft ID into the
+  matching Yamcs instance.</p>
   <p>Active TX:
     <select id="active"></select>
     <button id="apply" type="button">Apply</button>
@@ -300,6 +358,16 @@ INDEX_HTML = """<!DOCTYPE html>
       <tr><th>Name</th><th>TC endpoint</th><th>Status</th><th>TX</th></tr>
     </thead>
     <tbody id="rows"></tbody>
+  </table>
+  <h1>Deployments</h1>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th><th>Instance</th><th>SCID</th>
+        <th>TM port</th><th>Accepted</th>
+      </tr>
+    </thead>
+    <tbody id="deployments"></tbody>
   </table>
   <p class="meta" id="stats"></p>
   <script>
@@ -320,8 +388,18 @@ INDEX_HTML = """<!DOCTYPE html>
           </td>
           <td>${s.active_tx ? 'yes' : ''}</td>
         </tr>`).join('');
+      document.getElementById('deployments').innerHTML =
+        (status.deployments || []).map(d => `
+        <tr>
+          <td>${d.name}</td>
+          <td>${d.instance}</td>
+          <td>${d.spacecraft_id}</td>
+          <td>${d.tm_port}</td>
+          <td>${d.tm_accepted}</td>
+        </tr>`).join('');
       document.getElementById('stats').textContent =
         `TM accepted ${status.tm_accepted}, duplicates ${status.tm_duplicates}, ` +
+        `unknown SCID ${status.tm_unknown || 0}, ` +
         `TC forwarded ${status.tc_forwarded}, dropped ${status.tc_dropped}`;
     }
     document.getElementById('apply').onclick = async () => {
@@ -478,9 +556,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tc-bind-host", default="0.0.0.0")
     parser.add_argument("--tc-bind-port", type=int, default=50001)
     parser.add_argument("--yamcs-tm-host", default="127.0.0.1")
-    parser.add_argument("--yamcs-tm-port", type=int, default=50000)
     parser.add_argument("--yamcs-url", default="http://127.0.0.1:8090")
-    parser.add_argument("--yamcs-instance", default="fprime-project")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("runtime/config/deployments.json"),
+    )
     parser.add_argument("--stale-after", type=float, default=DEFAULT_STALE_AFTER)
     parser.add_argument("--dedup-window", type=float, default=DEFAULT_DEDUP_WINDOW)
     parser.add_argument(
@@ -494,11 +575,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    manifest = load_runtime_manifest(args.manifest)
     gateway = Gateway(
         yamcs_tm_host=args.yamcs_tm_host,
-        yamcs_tm_port=args.yamcs_tm_port,
+        manifest=manifest,
         yamcs_url=args.yamcs_url,
-        yamcs_instance=args.yamcs_instance,
         stale_after=args.stale_after,
         dedup_window=args.dedup_window,
     )
@@ -522,6 +603,11 @@ def main(argv: list[str] | None = None) -> int:
     ).start()
     server = ThreadingHTTPServer((args.api_host, args.api_port), make_handler(gateway))
     print(f"[gateway] API/UI on http://{args.api_host}:{args.api_port}/")
+    for item in manifest.deployments:
+        print(
+            f"[gateway] {item.name} SCID {item.spacecraft_id} -> "
+            f"{args.yamcs_tm_host}:{item.tm_port} ({item.instance})"
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

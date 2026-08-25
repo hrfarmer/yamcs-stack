@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
@@ -22,7 +23,13 @@ from fprime_gds.common.communication.ccsds.space_data_link import (
 
 from proves_gs.authentication import AuthenticateFramer
 from proves_gs.bundle import load_bundle
-from proves_gs.config import ClientConfig, ConfigError, apply_overrides, load_config
+from proves_gs.config import (
+    ClientConfig,
+    ConfigError,
+    SatelliteConfig,
+    apply_overrides,
+    load_config,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -42,22 +49,30 @@ def crc16_ccitt(data: bytes) -> int:
     return crc
 
 
-class TMFrameScanner:
-    """Incrementally extract fixed-length, CRC-valid TM frames from noisy bytes."""
+def extract_tm_spacecraft_id(frame: bytes) -> int:
+    return ((frame[0] << 8) | frame[1]) >> 4 & 0x3FF
 
-    def __init__(
-        self,
-        frame_length: int,
-        spacecraft_ids: list[int],
-        vc_id: int = 1,
-    ) -> None:
-        self.frame_length = frame_length
-        self.spacecraft_ids = spacecraft_ids
+
+def extract_tc_spacecraft_id(frame: bytes) -> int:
+    """Return the 10-bit CCSDS TC transfer-frame spacecraft ID."""
+    if len(frame) < 2:
+        raise ValueError("TC frame too short to read spacecraft ID")
+    return ((frame[0] << 8) | frame[1]) & 0x3FF
+
+
+class TMFrameScanner:
+    """Incrementally extract CRC-valid TM frames with per-SCID lengths."""
+
+    def __init__(self, frame_lengths: dict[int, int], vc_id: int = 1) -> None:
+        if not frame_lengths:
+            raise ValueError("at least one spacecraft ID is required")
+        self.frame_lengths = frame_lengths
         self.vc_id = vc_id
-        self.syncs = []
-        for spacecraft_id in spacecraft_ids:
+        self.syncs: list[tuple[bytes, int, int]] = []
+        for spacecraft_id, length in frame_lengths.items():
             word = (spacecraft_id << 4) | (vc_id << 1)
-            self.syncs.append(bytes([(word >> 8) & 0xFF, word & 0xFF]))
+            sync = bytes([(word >> 8) & 0xFF, word & 0xFF])
+            self.syncs.append((sync, spacecraft_id, length))
         self.buffer = bytearray()
         self.junk_bytes = 0
         self.frame_gaps = 0
@@ -67,32 +82,31 @@ class TMFrameScanner:
         self.buffer.extend(data)
         frames: list[bytes] = []
         while True:
-            positions = [
-                position
-                for sync in self.syncs
+            matches = [
+                (position, spacecraft_id, length)
+                for sync, spacecraft_id, length in self.syncs
                 if (position := self.buffer.find(sync)) != -1
             ]
-            if not positions:
+            if not matches:
                 if len(self.buffer) > 1:
                     self.junk_bytes += len(self.buffer) - 1
                     del self.buffer[: len(self.buffer) - 1]
                 break
-            start = min(positions)
+            start, spacecraft_id, frame_length = min(matches, key=lambda item: item[0])
             if start:
                 self.junk_bytes += start
                 del self.buffer[:start]
-            if len(self.buffer) < self.frame_length:
+            if len(self.buffer) < frame_length:
                 break
 
-            candidate = bytes(self.buffer[: self.frame_length])
+            candidate = bytes(self.buffer[:frame_length])
             expected_crc = int.from_bytes(candidate[-2:], "big")
             if crc16_ccitt(candidate[:-2]) != expected_crc:
                 del self.buffer[:2]
                 self.junk_bytes += 2
                 continue
 
-            del self.buffer[: self.frame_length]
-            spacecraft_id = ((candidate[0] << 8) | candidate[1]) >> 4 & 0x3FF
+            del self.buffer[:frame_length]
             vc_count = candidate[3]
             previous = self.last_vc_count.get(spacecraft_id)
             if previous is not None:
@@ -102,6 +116,17 @@ class TMFrameScanner:
             self.last_vc_count[spacecraft_id] = vc_count
             frames.append(candidate)
         return frames
+
+
+@dataclass
+class SatelliteRuntime:
+    """Loaded bundle plus framers for one satellite."""
+
+    name: str
+    spacecraft_id: int
+    frame_length: int
+    auth_framer: AuthenticateFramer | None
+    data_link_framer: SpaceDataLinkFramerDeframer
 
 
 def fix_ccsds_primary_header(space_packet: bytearray) -> None:
@@ -132,29 +157,82 @@ def wrap_tc(
     return data_link_framer.frame(auth_framer.frame(bytes(space_packet)))
 
 
+def wrap_tc_passthrough(
+    tc_transfer_frame: bytes,
+    data_link_framer: SpaceDataLinkFramerDeframer,
+) -> bytes:
+    """Space-data-link wrap without PROVES HMAC (stock ComCcsds F´)."""
+    space_packet = extract_space_packet(tc_transfer_frame)
+    fix_ccsds_primary_header(space_packet)
+    return data_link_framer.frame(bytes(space_packet))
+
+
+def select_satellite_for_tc(
+    tc_transfer_frame: bytes, satellites: dict[int, SatelliteRuntime]
+) -> SatelliteRuntime | None:
+    spacecraft_id = extract_tc_spacecraft_id(tc_transfer_frame)
+    return satellites.get(spacecraft_id)
+
+
+def _load_satellite_runtime(config: SatelliteConfig, vc_id: int) -> SatelliteRuntime:
+    bundle = load_bundle(config.input_dir, require_auth_key=not config.skip_auth)
+    auth_framer: AuthenticateFramer | None
+    if config.skip_auth:
+        auth_framer = None
+        print(f"[client] {config.name}: PROVES HMAC disabled (skip_auth)")
+    elif config.auth_key is not None:
+        auth_framer = AuthenticateFramer(
+            config.auth_key, config.sequence_number_file, config.spi
+        )
+    else:
+        key_file = config.auth_key_file or bundle.auth_key_path
+        if key_file is None:
+            raise SystemExit(
+                f"authentication key file is required for {config.name} "
+                "unless skip_auth"
+            )
+        sequence_file = config.sequence_number_file
+        if sequence_file is None:
+            raise SystemExit(f"sequence_number_file is required for {config.name}")
+        auth_framer = AuthenticateFramer.from_key_file(
+            key_file, sequence_file, config.spi
+        )
+    if config.sequence_number_file is None and auth_framer is not None:
+        raise SystemExit(f"sequence_number_file is required for {config.name}")
+    data_link_framer = SpaceDataLinkFramerDeframer(
+        scid=bundle.spacecraft_id, vcid=vc_id, frame_size=bundle.frame_length
+    )
+    print(
+        f"[client] {config.name}: SCID {bundle.spacecraft_id}, "
+        f"frame length {bundle.frame_length}"
+    )
+    return SatelliteRuntime(
+        name=config.name,
+        spacecraft_id=bundle.spacecraft_id,
+        frame_length=bundle.frame_length,
+        auth_framer=auth_framer,
+        data_link_framer=data_link_framer,
+    )
+
+
 def _forward_tm_serial(
     serial_port: BinaryIO,
     tm_socket: socket.socket,
     server_host: str,
     tm_port: int,
-    frame_length: int,
-    spacecraft_ids: list[int],
+    frame_lengths: dict[int, int],
     vc_id: int,
     stats: dict[str, int],
 ) -> None:
-    scanner = TMFrameScanner(frame_length, spacecraft_ids, vc_id)
+    scanner = TMFrameScanner(frame_lengths, vc_id)
     counts: Counter[int] = Counter()
     stats_started = time.monotonic()
-    print(
-        f"[TM] serial -> UDP {server_host}:{tm_port} "
-        f"(frame length {frame_length}, SCIDs {spacecraft_ids})"
-    )
+    print(f"[TM] serial -> UDP {server_host}:{tm_port} (SCIDs {sorted(frame_lengths)})")
     while True:
         chunk = serial_port.read(max(1, getattr(serial_port, "in_waiting", 0) or 1))
         for frame in scanner.feed(chunk):
             tm_socket.sendto(frame, (server_host, tm_port))
-            spacecraft_id = ((frame[0] << 8) | frame[1]) >> 4 & 0x3FF
-            counts[spacecraft_id] += 1
+            counts[extract_tm_spacecraft_id(frame)] += 1
             stats["tm_frames"] += 1
         now = time.monotonic()
         if now - stats_started >= 30:
@@ -189,40 +267,41 @@ def _forward_tm_tcp(
             stats["tm_frames"] += 1
 
 
-def wrap_tc_passthrough(
-    tc_transfer_frame: bytes,
-    data_link_framer: SpaceDataLinkFramerDeframer,
-) -> bytes:
-    """Space-data-link wrap without PROVES HMAC (stock ComCcsds F´)."""
-    space_packet = extract_space_packet(tc_transfer_frame)
-    fix_ccsds_primary_header(space_packet)
-    return data_link_framer.frame(bytes(space_packet))
-
-
 def _forward_tc(
     tc_socket: socket.socket,
     writer,
-    auth_framer: AuthenticateFramer | None,
-    data_link_framer: SpaceDataLinkFramerDeframer,
+    satellites: dict[int, SatelliteRuntime],
     transport: str,
     stats: dict[str, int],
 ) -> None:
-    mode = "authenticate" if auth_framer is not None else "passthrough"
-    print(f"[TC] UDP -> {mode} -> TC frame -> {transport}")
+    print(f"[TC] UDP -> SCID-aware wrap -> {transport}")
     while True:
         transfer_frame, _ = tc_socket.recvfrom(4096)
         try:
-            if auth_framer is None:
-                output = wrap_tc_passthrough(transfer_frame, data_link_framer)
+            satellite = select_satellite_for_tc(transfer_frame, satellites)
+        except ValueError as exc:
+            print(f"[TC] dropping malformed frame: {exc}")
+            continue
+        if satellite is None:
+            spacecraft_id = extract_tc_spacecraft_id(transfer_frame)
+            print(f"[TC] dropping frame for unknown SCID {spacecraft_id}")
+            continue
+        try:
+            if satellite.auth_framer is None:
+                output = wrap_tc_passthrough(transfer_frame, satellite.data_link_framer)
             else:
-                output = wrap_tc(transfer_frame, auth_framer, data_link_framer)
+                output = wrap_tc(
+                    transfer_frame,
+                    satellite.auth_framer,
+                    satellite.data_link_framer,
+                )
         except ValueError as exc:
             print(f"[TC] dropping malformed frame: {exc}")
             continue
         writer(output)
         stats["tc_frames"] += 1
         print(
-            f"[TC] #{stats['tc_frames']}: "
+            f"[TC] #{stats['tc_frames']} {satellite.name}: "
             f"{len(transfer_frame)} bytes -> {len(output)} bytes"
         )
 
@@ -273,16 +352,6 @@ def _detect_tc_host(explicit: str | None, server_host: str) -> str:
         probe.close()
 
 
-def _spacecraft_ids(value: str) -> tuple[int, ...]:
-    try:
-        values = [int(item.strip(), 0) for item in value.split(",") if item.strip()]
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("spacecraft IDs must be integers") from exc
-    if not values or any(not 0 <= item <= 0x3FF for item in values):
-        raise argparse.ArgumentTypeError("spacecraft IDs must be in the range 0..1023")
-    return tuple(values)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -293,9 +362,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="TOML config file (see config/*.example.toml)",
     )
-    # Optional CLI overrides for one-off debugging; prefer editing the config file.
     parser.add_argument("--mode", choices=["serial", "tcp"])
-    parser.add_argument("--input-dir", type=Path)
     parser.add_argument("--uart-device")
     parser.add_argument("--uart-baud", type=int)
     parser.add_argument("--tcp-host")
@@ -308,19 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gateway-api-url")
     parser.add_argument("--station-name")
     parser.add_argument("--heartbeat-interval", type=float)
-    parser.add_argument("--auth-key")
-    parser.add_argument("--auth-key-file", type=Path)
-    parser.add_argument("--sequence-number-file", type=Path)
-    parser.add_argument("--frame-length", type=int)
-    parser.add_argument("--spacecraft-id", type=_spacecraft_ids, action="append")
     parser.add_argument("--vc-id", type=int)
-    parser.add_argument("--spi", type=int)
-    parser.add_argument(
-        "--skip-auth",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="omit / require PROVES HMAC (overrides config skip_auth)",
-    )
     return parser
 
 
@@ -331,16 +386,11 @@ def parse_config(argv: list[str] | None = None) -> ClientConfig:
     except ConfigError as exc:
         raise SystemExit(f"config error: {exc}") from exc
 
-    spacecraft_ids = None
-    if args.spacecraft_id:
-        spacecraft_ids = tuple(item for group in args.spacecraft_id for item in group)
-
     try:
         return apply_overrides(
             config,
             {
                 "mode": args.mode,
-                "input_dir": args.input_dir,
                 "uart_device": args.uart_device,
                 "uart_baud": args.uart_baud,
                 "tcp_host": args.tcp_host,
@@ -353,14 +403,7 @@ def parse_config(argv: list[str] | None = None) -> ClientConfig:
                 "gateway_api_url": args.gateway_api_url,
                 "station_name": args.station_name,
                 "heartbeat_interval": args.heartbeat_interval,
-                "auth_key": args.auth_key,
-                "auth_key_file": args.auth_key_file,
-                "sequence_number_file": args.sequence_number_file,
-                "frame_length": args.frame_length,
-                "spacecraft_ids": spacecraft_ids,
                 "vc_id": args.vc_id,
-                "spi": args.spi,
-                "skip_auth": args.skip_auth,
             },
         )
     except ConfigError as exc:
@@ -369,28 +412,15 @@ def parse_config(argv: list[str] | None = None) -> ClientConfig:
 
 def main(argv: list[str] | None = None) -> int:
     config = parse_config(argv)
-    bundle = load_bundle(config.input_dir, require_auth_key=not config.skip_auth)
-    spacecraft_ids = list(config.spacecraft_ids or (bundle.spacecraft_id,))
-    frame_length = config.frame_length or bundle.frame_length
-    auth_framer: AuthenticateFramer | None
-    if config.skip_auth:
-        auth_framer = None
-        print("[client] PROVES HMAC authentication disabled (skip_auth)")
-    elif config.auth_key is not None:
-        auth_framer = AuthenticateFramer(
-            config.auth_key, config.sequence_number_file, config.spi
-        )
-    else:
-        key_file = config.auth_key_file or bundle.auth_key_path
-        if key_file is None:
-            raise SystemExit("authentication key file is required unless skip_auth")
-        auth_framer = AuthenticateFramer.from_key_file(
-            key_file, config.sequence_number_file, config.spi
-        )
-
-    data_link_framer = SpaceDataLinkFramerDeframer(
-        scid=spacecraft_ids[0], vcid=config.vc_id, frame_size=frame_length
-    )
+    runtimes = [
+        _load_satellite_runtime(satellite, config.vc_id)
+        for satellite in config.satellites
+    ]
+    spacecraft_ids = [item.spacecraft_id for item in runtimes]
+    if len(spacecraft_ids) != len(set(spacecraft_ids)):
+        raise SystemExit("satellite bundles must have unique spacecraft IDs")
+    satellites = {item.spacecraft_id: item for item in runtimes}
+    frame_lengths = {item.spacecraft_id: item.frame_length for item in runtimes}
     stats = {"tm_frames": 0, "tc_frames": 0}
     tm_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     tc_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -412,13 +442,17 @@ def main(argv: list[str] | None = None) -> int:
             tm_socket,
             config.server_host,
             config.server_tm_port,
-            frame_length,
-            spacecraft_ids,
+            frame_lengths,
             config.vc_id,
             stats,
         )
         writer = transport.write
     else:
+        lengths = {item.frame_length for item in runtimes}
+        if len(lengths) != 1:
+            raise SystemExit(
+                "tcp mode requires every [[satellite]] to share a frame length"
+            )
         print(f"[tcp] connecting to {config.tcp_host}:{config.tcp_port}")
         transport = socket.create_connection((config.tcp_host, config.tcp_port))
         tm_target = _forward_tm_tcp
@@ -427,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
             tm_socket,
             config.server_host,
             config.server_tm_port,
-            frame_length,
+            lengths.pop(),
             stats,
         )
         writer = transport.sendall
@@ -439,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     tm_thread = threading.Thread(target=tm_target, args=tm_args, daemon=True)
     tc_thread = threading.Thread(
         target=_forward_tc,
-        args=(tc_socket, writer, auth_framer, data_link_framer, config.mode, stats),
+        args=(tc_socket, writer, satellites, config.mode, stats),
         daemon=True,
     )
     heartbeat_thread = threading.Thread(
