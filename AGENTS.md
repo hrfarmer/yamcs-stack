@@ -25,16 +25,18 @@ Notes below cover only non-obvious setup/run caveats.
   startup are intentionally NOT in it (see below).
 
 ### Docker / Yamcs (required for the server stack)
-- Yamcs runs only in Docker. Docker is **not preinstalled** on the base VM. The
-  committed `.cursor/environment.json` `start` step installs `docker.io` +
-  `sudo dockerd`, which is unreliable inside the Firecracker Cloud VM. If Docker
-  is missing or the daemon won't start, install Docker CE and configure it for
-  this kernel: storage driver `fuse-overlayfs`, `features.containerd-snapshotter`
-  set to `false` (needed on Docker 29+ so fuse-overlayfs is used), and switch
-  `iptables`/`ip6tables` to their `-legacy` alternatives. Then run `sudo dockerd`
-  (leave it running, e.g. in a tmux session) and `sudo chmod 666
-  /var/run/docker.sock` so the `docker` CLI works without sudo (the Makefiles
-  call `docker` directly).
+- Yamcs runs only in Docker. Docker is **not preinstalled** on the base VM; the
+  committed `.cursor/environment.json` `start` step installs Docker CE, writes a
+  Firecracker-compatible `/etc/docker/daemon.json`, starts `dockerd`, builds the
+  Yamcs image, and boots the container. If you ever need to set Docker up by
+  hand, replicate that: storage driver `fuse-overlayfs`,
+  `features.containerd-snapshotter` set to `false` (needed on Docker 29+ so
+  fuse-overlayfs is actually used), and switch `iptables`/`ip6tables` to their
+  `-legacy` alternatives. Then run `sudo dockerd` (leave it running, e.g. in a
+  tmux session) and `sudo chmod 666 /var/run/docker.sock` so the `docker` CLI
+  works without sudo (the Makefiles call `docker` directly). The plain
+  distro `docker.io` package + default overlay2 driver does **not** work on this
+  kernel, so keep the `fuse-overlayfs` config.
 - The Yamcs image (`proves-yamcs:5.12.8`) is built from `server/Dockerfile` via a
   Maven builder stage: `cd server && make docker-image`. No host Maven/JDK needed.
 
