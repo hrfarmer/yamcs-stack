@@ -11,6 +11,7 @@ GS clients (Tailscale)          This host
   TC UDP :50001  ◄───────────── gateway ◄─UDP── Yamcs :50001 (host.docker.internal)
   HTTP heartbeat ─────────────► gateway :8091
 Yamcs UI / API                  :8090
+Grafana (JAOPS Yamcs plugin)    :3000
 ```
 
 The gateway:
@@ -33,9 +34,10 @@ make yamcs
 ```
 
 Web UI: <http://localhost:8090>  
+Grafana: <http://localhost:3000> (JAOPS Yamcs plugin; anonymous Admin)  
 Ground stations: <http://localhost:8091>
 
-Stop with `make yamcs-stop`. `make yamcs-server` starts only the Yamcs container.
+Stop with `make yamcs-stop`. `make yamcs-server` starts Yamcs and Grafana.
 
 ## Selecting a transmit station
 
@@ -48,6 +50,7 @@ Stop with `make yamcs-stop`. `make yamcs-server` starts only the Yamcs container
 | Port | Role |
 |------|------|
 | TCP 8090 | Yamcs HTTP / web |
+| TCP 3000 | Grafana (JAOPS Yamcs app + datasource) |
 | TCP 8091 | Gateway API + GS UI |
 | UDP 51000 | TM ingest from GS clients (Tailscale) |
 | UDP 50000 | Yamcs TM in (loopback only; fed by gateway) |
@@ -56,5 +59,5 @@ Stop with `make yamcs-stop`. `make yamcs-server` starts only the Yamcs container
 ## Security
 
 Development posture: API binds all interfaces, CORS is open, no Yamcs operator
-auth/TLS. Rely on Tailscale for network access control; do not expose these
-ports on the public Internet.
+auth/TLS, and Grafana allows anonymous Admin. Rely on Tailscale for network
+access control; do not expose these ports on the public Internet.

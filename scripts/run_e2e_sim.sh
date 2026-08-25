@@ -16,6 +16,31 @@ CLIENT_TC_PORT="${CLIENT_TC_PORT:-51001}"
 BRIDGE_TCP_PORT="${BRIDGE_TCP_PORT:-5000}"
 YAMCS_URL="${YAMCS_URL:-http://127.0.0.1:8090}"
 YAMCS_INSTANCE="${YAMCS_INSTANCE:-fprime-project}"
+GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
+KEEP_ALIVE="${E2E_KEEP_ALIVE:-0}"
+SKIP_TEST="${E2E_SKIP_TEST:-0}"
+
+for arg in "$@"; do
+  case "$arg" in
+    --keep-alive) KEEP_ALIVE=1 ;;
+    --skip-test) SKIP_TEST=1 ;;
+    -h|--help)
+      cat <<EOF
+Usage: $(basename "$0") [--keep-alive] [--skip-test]
+
+  --keep-alive   Leave F´, the GS client, Yamcs, Grafana, and the gateway
+                 running until Ctrl+C (for interactive testing without a board).
+  --skip-test    Start the stack without the CMD_NO_OP pytest round-trip.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $arg" >&2
+      echo "try: $(basename "$0") --help" >&2
+      exit 1
+      ;;
+  esac
+done
 
 mkdir -p "$WORK" "$LOG_DIR" "$BUNDLE_DIR"
 PIDS=()
@@ -117,18 +142,19 @@ log "preparing server + client environments"
   make setup
 )
 
-log "starting Yamcs (uid=$YAMCS_UID gid=$YAMCS_GID)"
+log "starting Yamcs + Grafana (uid=$YAMCS_UID gid=$YAMCS_GID)"
 (
   cd "$ROOT/server"
   # Fail fast on bad XTCE/config before the readiness wait.
   docker compose run --rm --no-deps yamcs \
     --check --no-color --etc-dir /yamcs-config/etc \
     --data-dir /yamcs-data --cache-dir /yamcs-cache
-  docker compose up -d yamcs
+  docker compose up -d yamcs grafana
 )
 "$ROOT/server/.venv/bin/python" - <<PY
-from proves_yamcs.supervisor import wait_until_ready
+from proves_yamcs.supervisor import wait_until_grafana_ready, wait_until_ready
 wait_until_ready("$YAMCS_URL", "$YAMCS_INSTANCE", 180)
+wait_until_grafana_ready("$GRAFANA_URL", 180)
 PY
 
 log "starting event bridge"
@@ -201,11 +227,42 @@ else:
     raise SystemExit("ground station did not register with gateway")
 PY
 
-log "running CMD_NO_OP round-trip test"
-(
-  cd "$ROOT/server"
-  YAMCS_URL="$YAMCS_URL" YAMCS_INSTANCE="$YAMCS_INSTANCE" \
-    .venv/bin/pytest tests/integration -q
-)
+if [[ "$SKIP_TEST" != "1" ]]; then
+  log "running CMD_NO_OP round-trip test"
+  set +e
+  (
+    cd "$ROOT/server"
+    YAMCS_URL="$YAMCS_URL" YAMCS_INSTANCE="$YAMCS_INSTANCE" \
+      .venv/bin/pytest tests/integration -q
+  )
+  test_status=$?
+  set -e
+  if [[ "$test_status" -ne 0 ]]; then
+    if [[ "$KEEP_ALIVE" == "1" ]]; then
+      log "round-trip test failed; leaving the stack up for inspection"
+    else
+      exit "$test_status"
+    fi
+  fi
+else
+  log "skipping CMD_NO_OP round-trip test"
+fi
+
+if [[ "$KEEP_ALIVE" == "1" ]]; then
+  log "simulated stack is running (Ctrl+C to stop)"
+  log "  Yamcs UI:    $YAMCS_URL"
+  log "  Grafana:     $GRAFANA_URL  (PROVES Yamcs Overview)"
+  log "  Gateway UI:  http://127.0.0.1:8091"
+  log "  F´ TM/TC:    UDP :$FPRIME_UDP_PORT / :$((FPRIME_UDP_PORT + 1))"
+  while true; do
+    for pid in "${PIDS[@]}"; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        log "process $pid exited; shutting down"
+        exit 1
+      fi
+    done
+    sleep 2
+  done
+fi
 
 log "e2e succeeded"

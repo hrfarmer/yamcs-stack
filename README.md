@@ -36,8 +36,8 @@ make setup
 UART_DEVICE=/dev/ttyUSB0 SERVER_HOST=<yamcs-tailscale-name> STATION_NAME=gs-lab make run
 ```
 
-Open Yamcs at `http://<server>:8090` and the ground-station panel at
-`http://<server>:8091`.
+Open Yamcs at `http://<server>:8090`, Grafana at `http://<server>:3000`,
+and the ground-station panel at `http://<server>:8091`.
 
 ## Simulated full-stack CI / local e2e
 
@@ -46,5 +46,14 @@ Open Yamcs at `http://<server>:8090` and the ground-station panel at
 ```
 
 Builds [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference)
-(`v0.1.0` by default), runs F´ + UDP/TCP bridge + GS client + Yamcs gateway, and
-asserts a `CMD_NO_OP` round-trip. See [`sim/README.md`](sim/README.md).
+(`v0.1.0` by default), runs F´ + UDP/TCP bridge + GS client + Yamcs gateway +
+Grafana, and asserts a `CMD_NO_OP` round-trip. See [`sim/README.md`](sim/README.md).
+
+To leave that same stack running for interactive testing (no PROVES board):
+
+```sh
+./scripts/run_test_sim.sh
+```
+
+Then open Yamcs (`:8090`) and Grafana (`:3000`, home dashboard **PROVES Yamcs
+Overview**). Ctrl+C stops the stack.

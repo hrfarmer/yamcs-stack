@@ -1,0 +1,34 @@
+apiVersion: 1
+prune: true
+
+datasources:
+  - name: JAOPS Yamcs
+    uid: jaops-yamcs-main
+    type: jaops-yamcs-datasource
+    access: proxy
+    orgId: 1
+    isDefault: true
+    editable: true
+    jsonData:
+      hosts:
+        yamcs:
+          name: PROVES Yamcs
+          description: Central Yamcs instance on the compose network
+          path: yamcs:8090
+          tlsEnabled: false
+          tlsInsecure: false
+          authEnabled: false
+          protobuf: true
+      endpoints:
+        fprime_realtime:
+          name: fprime-project realtime
+          description: Live processor for the fprime-project instance
+          host: yamcs
+          instance: fprime-project
+          processor: realtime
+        fprime_replay:
+          name: fprime-project replay
+          description: Archive replay processor for the fprime-project instance
+          host: yamcs
+          instance: fprime-project
+          processor: replay

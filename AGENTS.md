@@ -5,10 +5,12 @@
 The repo is the **PROVES Yamcs stack**, a spacecraft ground system split into two
 `uv`-managed Python packages plus a simulation harness:
 
-- `server/` — central Yamcs (runs in Docker, web UI on `:8090`), the F´ event
-  bridge, and the multi-ground-station gateway (API/UI on `:8091`).
+- `server/` — central Yamcs (runs in Docker, web UI on `:8090`), Grafana with
+  the JAOPS Yamcs plugin (`:3000`), the F´ event bridge, and the
+  multi-ground-station gateway (API/UI on `:8091`).
 - `client/` — the ground-station radio passthrough client.
-- `sim/` — full-stack e2e harness (`scripts/run_e2e_sim.sh`).
+- `sim/` — full-stack e2e harness (`scripts/run_e2e_sim.sh`) and the
+  long-running test stack (`scripts/run_test_sim.sh`).
 
 Standard lint/test/build/run commands live in `server/Makefile` and
 `client/Makefile` (`make help` lists targets); CI is `.github/workflows/ci.yml`.
@@ -39,12 +41,16 @@ Notes below cover only non-obvious setup/run caveats.
   kernel, so keep the `fuse-overlayfs` config.
 - The Yamcs image (`proves-yamcs:5.12.8`) is built from `server/Dockerfile` via a
   Maven builder stage: `cd server && make docker-image`. No host Maven/JDK needed.
+  Grafana uses `grafana/grafana:13.0.7` from Docker Hub and installs
+  `jaops-yamcs-app` on first start (`GF_INSTALL_PLUGINS`).
 
 ### Running and testing
-- Boot the whole server stack (Yamcs + gateway + event bridge) with
+- Boot the whole server stack (Yamcs + Grafana + gateway + event bridge) with
   `cd server && make yamcs INPUT_DIR=tests/fixtures/proves`. It runs in the
   foreground as a supervisor; stop it with `make yamcs-stop`. Yamcs web UI is
-  `http://localhost:8090` (no auth in dev), gateway UI `http://localhost:8091`.
+  `http://localhost:8090` (no auth in dev), Grafana `http://localhost:3000`
+  (anonymous Admin, JAOPS Yamcs plugin, home dashboard **PROVES Yamcs Overview**),
+  gateway UI `http://localhost:8091`.
 - Because there is no committed flight dictionary, always pass
   `INPUT_DIR=tests/fixtures/proves` to `make prepare` / `make yamcs*` targets
   (matches CI); otherwise Yamcs config rendering has no input bundle.
@@ -52,6 +58,9 @@ Notes below cover only non-obvious setup/run caveats.
   suite and `scripts/run_e2e_sim.sh` require a live/simulated spacecraft (the e2e
   script builds `fprime-yamcs-reference` in C++), so they will not pass against a
   bare Yamcs boot.
+- To exercise Yamcs + Grafana + the gateway without a PROVES board, run
+  `./scripts/run_test_sim.sh` (needs `git`, `docker`, `python3`, a C++ toolchain,
+  and `cmake`). It is the e2e sim kept alive until Ctrl+C.
 - Expected without a ground-station client: the gateway reports `tc_dropped`
   (not `tc_forwarded`) when a telecommand is issued, because no active TX station
   is registered. The command still traverses Yamcs → `UDP_TC_OUT` → gateway.
