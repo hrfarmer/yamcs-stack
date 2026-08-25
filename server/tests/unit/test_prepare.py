@@ -3,41 +3,94 @@ from pathlib import Path
 import pytest
 
 from proves_yamcs.bundle import RuntimeBundle, load_bundle
-from proves_yamcs.prepare import generate_xtce, render_configuration, validate_xtce
+from proves_yamcs.deployments import ResolvedDeployment
+from proves_yamcs.prepare import (
+    generate_xtce,
+    prepare,
+    render_configuration,
+    validate_xtce,
+)
+from tests.unit.helpers import write_bundle, write_deployments
 
 
-def bundle(tmp_path: Path) -> RuntimeBundle:
+def bundle(tmp_path: Path, spacecraft_id: int = 68) -> RuntimeBundle:
     return RuntimeBundle(
         directory=tmp_path,
         dictionary_path=tmp_path / "fprime-dictionary.json",
-        spacecraft_id=68,
+        spacecraft_id=spacecraft_id,
         frame_length=248,
+    )
+
+
+def resolved(
+    tmp_path: Path,
+    *,
+    name: str = "proves-flight",
+    spacecraft_id: int = 68,
+    tm_port: int = 50000,
+) -> ResolvedDeployment:
+    return ResolvedDeployment(
+        name=name,
+        bundle=bundle(tmp_path, spacecraft_id),
+        tm_port=tm_port,
+        tc_port=50001,
     )
 
 
 def test_render_configuration_substitutes_all_dynamic_values(tmp_path):
     runtime = tmp_path / "runtime"
+    item = resolved(tmp_path)
     config = render_configuration(
-        bundle(tmp_path),
+        [item],
         Path("config/etc"),
         runtime,
-        tm_root_container="/ReferenceDeployment_ReferenceDeployment/CCSDSSpacePacket",
+        tm_root_containers={
+            "proves-flight": "/ReferenceDeployment_ReferenceDeployment/CCSDSSpacePacket"
+        },
     )
 
-    instance = (config / "etc/yamcs.fprime-project.yaml").read_text(encoding="utf-8")
+    instance = (config / "etc/yamcs.proves-flight.yaml").read_text(encoding="utf-8")
     assert "@SPACECRAFT_ID@" not in instance
     assert "@FRAME_LENGTH@" not in instance
     assert "@TM_ROOT_CONTAINER@" not in instance
+    assert "@TM_PORT@" not in instance
+    assert "@MDB_FILE@" not in instance
     assert instance.count("spacecraftId: 68") == 2
     assert instance.count("248") == 3
+    assert "port: 50000" in instance
+    assert "proves-flight.xtce.xml" in instance
     assert "/ReferenceDeployment_ReferenceDeployment/CCSDSSpacePacket" in instance
     assert (config / "mdb/ground-control.xtce.xml").is_file()
+    global_config = (config / "etc/yamcs.yaml").read_text(encoding="utf-8")
+    assert "proves-flight" in global_config
+    assert "@INSTANCES@" not in global_config
+    overlay = (runtime / "compose.udp.yaml").read_text(encoding="utf-8")
+    assert "127.0.0.1:50000:50000/udp" in overlay
+    manifest = (config / "deployments.json").read_text(encoding="utf-8")
+    assert "proves-flight" in manifest
 
     secret_file = runtime / "secrets/yamcs-secret-key"
     assert secret_file.stat().st_mode & 0o777 == 0o600
     assert secret_file.read_text(encoding="ascii").strip() not in Path(
         "config/etc/yamcs.yaml.template"
     ).read_text(encoding="utf-8")
+
+
+def test_render_configuration_writes_two_instances(tmp_path):
+    runtime = tmp_path / "runtime"
+    deployments = [
+        resolved(tmp_path / "a", name="sat-a", spacecraft_id=68, tm_port=50000),
+        resolved(tmp_path / "b", name="sat-b", spacecraft_id=67, tm_port=50002),
+    ]
+    config = render_configuration(deployments, Path("config/etc"), runtime)
+    global_config = (config / "etc/yamcs.yaml").read_text(encoding="utf-8")
+    assert "- sat-a" in global_config
+    assert "- sat-b" in global_config
+    assert (config / "etc/yamcs.sat-a.yaml").is_file()
+    assert (config / "etc/yamcs.sat-b.yaml").is_file()
+    overlay = (runtime / "compose.udp.yaml").read_text(encoding="utf-8")
+    assert "50000:50000/udp" in overlay
+    assert "50002:50002/udp" in overlay
 
 
 def test_validate_xtce_requires_root_container(tmp_path):
@@ -58,8 +111,38 @@ def test_validate_xtce_requires_root_container(tmp_path):
 
 def test_generate_xtce_from_representative_dictionary(tmp_path):
     generated = generate_xtce(
-        load_bundle(Path("tests/fixtures/proves")), tmp_path / "config"
+        load_bundle(Path("tests/fixtures/proves")),
+        tmp_path / "config",
+        "proves-flight.xtce.xml",
     )
 
     assert generated.is_file()
     validate_xtce(generated)
+
+
+def test_prepare_two_deployments(tmp_path):
+    first = write_bundle(tmp_path / "sat-a", 68)
+    second = write_bundle(tmp_path / "sat-b", 67)
+    deployments_file = write_deployments(
+        tmp_path / "deployments.toml",
+        [
+            "[[deployment]]",
+            'name = "sat-a"',
+            f'input_dir = "{first}"',
+            "[[deployment]]",
+            'name = "sat-b"',
+            f'input_dir = "{second}"',
+        ],
+    )
+    runtime = tmp_path / "runtime"
+    prepared = prepare(deployments_file, runtime, Path("config/etc"))
+    assert [item.name for item in prepared] == ["sat-a", "sat-b"]
+    config = runtime / "config"
+    assert (config / "mdb/sat-a.xtce.xml").is_file()
+    assert (config / "mdb/sat-b.xtce.xml").is_file()
+    sat_a = (config / "etc/yamcs.sat-a.yaml").read_text(encoding="utf-8")
+    sat_b = (config / "etc/yamcs.sat-b.yaml").read_text(encoding="utf-8")
+    assert "spacecraftId: 68" in sat_a
+    assert "spacecraftId: 67" in sat_b
+    assert "/CCSDSSpacePacket" in sat_a
+    assert "/CCSDSSpacePacket" in sat_b

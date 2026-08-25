@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import tomllib
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
+
+NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ConfigError(ValueError):
@@ -14,11 +17,31 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class SatelliteConfig:
+    """Per-satellite bundle, auth, and framing settings."""
+
+    name: str
+    input_dir: Path
+    auth_key: str | None = None
+    auth_key_file: Path | None = None
+    sequence_number_file: Path | None = None
+    spi: int = 0
+    skip_auth: bool = False
+
+    def validate(self) -> None:
+        if NAME_PATTERN.fullmatch(self.name) is None:
+            raise ConfigError(
+                f"satellite name {self.name!r} must match {NAME_PATTERN.pattern}"
+            )
+        if not 0 <= self.spi <= 0xFFFF:
+            raise ConfigError("spi must fit in 16 bits")
+
+
+@dataclass(frozen=True)
 class ClientConfig:
     """Runtime settings for proves-gs-client."""
 
     mode: str = "serial"
-    input_dir: Path = Path("inputs/proves")
     uart_device: str = "/dev/ttyUSB0"
     uart_baud: int = 115200
     tcp_host: str = "127.0.0.1"
@@ -31,14 +54,8 @@ class ClientConfig:
     gateway_api_url: str | None = None
     station_name: str = ""
     heartbeat_interval: float = 5.0
-    auth_key: str | None = None
-    auth_key_file: Path | None = None
-    sequence_number_file: Path = Path("runtime/state/sequence-number")
-    frame_length: int | None = None
-    spacecraft_ids: tuple[int, ...] | None = None
     vc_id: int = 1
-    spi: int = 0
-    skip_auth: bool = False
+    satellites: tuple[SatelliteConfig, ...] = ()
 
     def validate(self) -> None:
         if self.mode not in {"serial", "tcp"}:
@@ -53,23 +70,17 @@ class ClientConfig:
             raise ConfigError("station_name must not be empty")
         if self.tcp_port < 1 or self.server_tm_port < 1 or self.tc_listen_port < 1:
             raise ConfigError("ports must be positive")
-        if self.spacecraft_ids is not None and (
-            not self.spacecraft_ids
-            or any(not 0 <= item <= 0x3FF for item in self.spacecraft_ids)
-        ):
-            raise ConfigError("spacecraft_ids must be in the range 0..1023")
         if self.mode == "serial" and not self.uart_device.strip():
             raise ConfigError("uart_device is required for serial mode")
         if self.mode == "tcp" and not self.tcp_host.strip():
             raise ConfigError("tcp_host is required for tcp mode")
-
-
-_PATH_FIELDS = {
-    "input_dir",
-    "auth_key_file",
-    "sequence_number_file",
-}
-_OPTIONAL_PATH_FIELDS = {"auth_key_file"}
+        if not self.satellites:
+            raise ConfigError("at least one [[satellite]] table is required")
+        names = [item.name for item in self.satellites]
+        if len(names) != len(set(names)):
+            raise ConfigError("satellite names must be unique")
+        for satellite in self.satellites:
+            satellite.validate()
 
 
 def _resolve_path(value: Any, base_dir: Path, *, required: bool) -> Path | None:
@@ -107,6 +118,40 @@ def _as_str(value: Any, field: str) -> str:
     return value
 
 
+def _load_satellite(raw: Any, base_dir: Path, index: int) -> SatelliteConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"satellite {index} must be a table")
+    known = {item.name for item in fields(SatelliteConfig)}
+    unknown = sorted(set(raw) - known)
+    if unknown:
+        raise ConfigError(f"unknown keys in satellite {index}: {', '.join(unknown)}")
+    if "name" not in raw:
+        raise ConfigError(f"satellite {index} is missing name")
+    if "input_dir" not in raw:
+        raise ConfigError(f"satellite {index} is missing input_dir")
+    name = _as_str(raw["name"], "name")
+    sequence_default = f"runtime/state/sequence-{name}"
+    return SatelliteConfig(
+        name=name,
+        input_dir=_resolve_path(raw["input_dir"], base_dir, required=True),
+        auth_key=(
+            None
+            if "auth_key" not in raw or raw["auth_key"] is None
+            else _as_str(raw["auth_key"], "auth_key")
+        ),
+        auth_key_file=_resolve_path(raw.get("auth_key_file"), base_dir, required=False)
+        if "auth_key_file" in raw
+        else None,
+        sequence_number_file=_resolve_path(
+            raw.get("sequence_number_file", sequence_default),
+            base_dir,
+            required=True,
+        ),
+        spi=_as_int(raw.get("spi", 0), "spi"),
+        skip_auth=_as_bool(raw.get("skip_auth", False), "skip_auth"),
+    )
+
+
 def load_config(path: Path) -> ClientConfig:
     """Load and validate a TOML client config file."""
     config_path = path.expanduser().resolve()
@@ -120,6 +165,7 @@ def load_config(path: Path) -> ClientConfig:
         raise ConfigError("config root must be a table")
 
     base_dir = config_path.parent
+    satellites_raw = raw.pop("satellite", None)
     known = {item.name for item in fields(ClientConfig)}
     unknown = sorted(set(raw) - known)
     if unknown:
@@ -127,36 +173,17 @@ def load_config(path: Path) -> ClientConfig:
 
     values: dict[str, Any] = {}
     for key, value in raw.items():
-        if key in _PATH_FIELDS:
-            values[key] = _resolve_path(
-                value, base_dir, required=key not in _OPTIONAL_PATH_FIELDS
-            )
-        elif key == "spacecraft_ids":
-            if not isinstance(value, list) or not value:
-                raise ConfigError(
-                    "spacecraft_ids must be a non-empty array of integers"
-                )
-            values[key] = tuple(_as_int(item, "spacecraft_ids") for item in value)
-        elif key in {
+        if key in {
             "uart_baud",
             "tcp_port",
             "server_tm_port",
             "tc_listen_port",
             "vc_id",
-            "spi",
         }:
             values[key] = _as_int(value, key)
-        elif key == "frame_length":
-            values[key] = None if value is None else _as_int(value, key)
         elif key == "heartbeat_interval":
             values[key] = _as_float(value, key)
-        elif key == "skip_auth":
-            values[key] = _as_bool(value, key)
-        elif key in {
-            "tc_advertise_host",
-            "gateway_api_url",
-            "auth_key",
-        }:
+        elif key in {"tc_advertise_host", "gateway_api_url"}:
             if value is None:
                 values[key] = None
             else:
@@ -166,14 +193,12 @@ def load_config(path: Path) -> ClientConfig:
 
     if "station_name" not in values or not str(values.get("station_name", "")).strip():
         values["station_name"] = socket.gethostname()
-    if "sequence_number_file" not in values:
-        values["sequence_number_file"] = _resolve_path(
-            "runtime/state/sequence-number", base_dir, required=True
-        )
-    if "input_dir" not in values:
-        values["input_dir"] = _resolve_path("inputs/proves", base_dir, required=True)
-    elif values["input_dir"] is None:
-        raise ConfigError("input_dir is required")
+    if not isinstance(satellites_raw, list) or not satellites_raw:
+        raise ConfigError("at least one [[satellite]] table is required")
+    values["satellites"] = tuple(
+        _load_satellite(entry, base_dir, index)
+        for index, entry in enumerate(satellites_raw)
+    )
 
     config = ClientConfig(**values)
     config.validate()
@@ -181,7 +206,7 @@ def load_config(path: Path) -> ClientConfig:
 
 
 def apply_overrides(config: ClientConfig, overrides: dict[str, Any]) -> ClientConfig:
-    """Return a copy of config with non-None overrides applied."""
+    """Return a copy of config with non-None station-level overrides applied."""
     filtered = {key: value for key, value in overrides.items() if value is not None}
     if not filtered:
         return config

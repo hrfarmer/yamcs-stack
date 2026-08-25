@@ -1,15 +1,19 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from proves_gs.authentication import AuthenticateFramer, SequenceStore
 from proves_gs.bundle import BundleError, load_auth_key, load_bundle
 from proves_gs.client import (
+    SatelliteRuntime,
     TMFrameScanner,
     build_parser,
     crc16_ccitt,
     extract_space_packet,
+    extract_tc_spacecraft_id,
     fix_ccsds_primary_header,
+    select_satellite_for_tc,
 )
 from proves_gs.config import ConfigError, apply_overrides, load_config
 
@@ -27,12 +31,19 @@ def make_tm_frame(spacecraft_id: int, vc_count: int, length: int = 16) -> bytes:
     return bytes(frame)
 
 
+def make_tc_frame(
+    spacecraft_id: int, payload: bytes = b"\x18\x00\xc0\x00\x00\x00\xaa"
+) -> bytes:
+    header = (spacecraft_id & 0x3FF).to_bytes(2, "big") + b"\x00\x00\x00"
+    return header + payload + b"zz"
+
+
 def test_crc_known_vector():
     assert crc16_ccitt(b"123456789") == 0x29B1
 
 
 def test_scanner_recovers_valid_frames_from_junk_and_tracks_gaps():
-    scanner = TMFrameScanner(16, [68])
+    scanner = TMFrameScanner({68: 16})
     first = make_tm_frame(68, 3)
     second = make_tm_frame(68, 6)
 
@@ -43,10 +54,18 @@ def test_scanner_recovers_valid_frames_from_junk_and_tracks_gaps():
 
 
 def test_scanner_accepts_multiple_spacecraft_ids():
-    scanner = TMFrameScanner(16, [68, 67])
+    scanner = TMFrameScanner({68: 16, 67: 16})
     frames = [make_tm_frame(67, 1), make_tm_frame(68, 1)]
 
     assert scanner.feed(b"".join(frames)) == frames
+
+
+def test_scanner_uses_per_scid_frame_length():
+    scanner = TMFrameScanner({68: 16, 67: 20})
+    first = make_tm_frame(68, 1, 16)
+    second = make_tm_frame(67, 1, 20)
+
+    assert scanner.feed(first + second) == [first, second]
 
 
 def test_extract_and_fix_space_packet_header():
@@ -65,6 +84,26 @@ def test_extract_rejects_short_tc_frame():
         extract_space_packet(b"short")
 
 
+def test_extract_tc_spacecraft_id():
+    assert extract_tc_spacecraft_id(make_tc_frame(68)) == 68
+    assert extract_tc_spacecraft_id(make_tc_frame(67)) == 67
+    with pytest.raises(ValueError, match="spacecraft ID"):
+        extract_tc_spacecraft_id(b"\x00")
+
+
+def test_select_satellite_for_tc_matches_scid_and_drops_unknown():
+    known = SatelliteRuntime(
+        name="sat-a",
+        spacecraft_id=68,
+        frame_length=248,
+        auth_framer=None,
+        data_link_framer=MagicMock(),
+    )
+    satellites = {68: known}
+    assert select_satellite_for_tc(make_tc_frame(68), satellites) is known
+    assert select_satellite_for_tc(make_tc_frame(67), satellites) is None
+
+
 def test_client_parser_requires_config():
     parser = build_parser()
     with pytest.raises(SystemExit):
@@ -74,7 +113,7 @@ def test_client_parser_requires_config():
     )
 
 
-def test_load_config_resolves_paths_and_overrides(tmp_path):
+def test_load_config_requires_satellite_tables(tmp_path):
     config_path = tmp_path / "gs.toml"
     input_dir = tmp_path / "inputs"
     input_dir.mkdir()
@@ -82,13 +121,14 @@ def test_load_config_resolves_paths_and_overrides(tmp_path):
         "\n".join(
             [
                 'mode = "tcp"',
-                'input_dir = "inputs"',
                 'server_host = "yamcs.tailnet"',
                 'station_name = "gs-a"',
                 'tcp_host = "127.0.0.1"',
                 "tcp_port = 5000",
+                "[[satellite]]",
+                'name = "proves-flight"',
+                'input_dir = "inputs"',
                 "skip_auth = true",
-                "spacecraft_ids = [68, 67]",
                 "",
             ]
         ),
@@ -97,9 +137,11 @@ def test_load_config_resolves_paths_and_overrides(tmp_path):
 
     config = load_config(config_path)
     assert config.mode == "tcp"
-    assert config.input_dir == input_dir.resolve()
-    assert config.spacecraft_ids == (68, 67)
-    assert config.skip_auth is True
+    assert len(config.satellites) == 1
+    assert config.satellites[0].name == "proves-flight"
+    assert config.satellites[0].input_dir == input_dir.resolve()
+    assert config.satellites[0].skip_auth is True
+    assert config.satellites[0].sequence_number_file.name == "sequence-proves-flight"
 
     updated = apply_overrides(config, {"station_name": "gs-b", "tcp_port": 6000})
     assert updated.station_name == "gs-b"
@@ -107,10 +149,21 @@ def test_load_config_resolves_paths_and_overrides(tmp_path):
     assert updated.server_host == "yamcs.tailnet"
 
 
+def test_load_config_rejects_missing_satellite_table(tmp_path):
+    config_path = tmp_path / "gs.toml"
+    config_path.write_text(
+        'mode = "serial"\nstation_name = "gs-a"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=r"\[\[satellite\]\]"):
+        load_config(config_path)
+
+
 def test_load_config_rejects_unknown_keys(tmp_path):
     config_path = tmp_path / "bad.toml"
     config_path.write_text(
-        'mode = "serial"\nstation_name = "x"\nbogus = 1\n',
+        'mode = "serial"\nstation_name = "x"\nbogus = 1\n'
+        '[[satellite]]\nname = "a"\ninput_dir = "."\n',
         encoding="utf-8",
     )
     with pytest.raises(ConfigError, match="unknown config keys"):

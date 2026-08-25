@@ -10,12 +10,12 @@ COMPOSE ?= $(shell \
 	if docker compose version >/dev/null 2>&1; then echo "docker compose"; \
 	elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; \
 	else echo "docker compose"; fi)
+COMPOSE_RUNTIME = $(COMPOSE) -f $(ROOT)/compose.yaml -f $(ROOT)/$(RUNTIME_DIR)/compose.udp.yaml
 
-INPUT_DIR ?= inputs/proves
+DEPLOYMENTS ?= config/deployments.toml
 RUNTIME_DIR ?= runtime
 YAMCS_URL ?= http://localhost:8090
 GRAFANA_URL ?= http://localhost:3000
-YAMCS_INSTANCE ?= fprime-project
 YAMCS_UID ?= $(shell id -u)
 YAMCS_GID ?= $(shell id -g)
 export YAMCS_UID YAMCS_GID
@@ -52,7 +52,7 @@ ensure-docker: ## Require a working Docker engine and Compose
 
 .PHONY: docker-image
 docker-image: ensure-docker ## Build the pinned Yamcs Docker image
-	$(COMPOSE) build yamcs
+	$(COMPOSE) -f $(ROOT)/compose.yaml build yamcs
 
 .PHONY: setup-python
 setup-python: patch-events ## Install Python deps and patch fprime-yamcs-events
@@ -63,13 +63,13 @@ setup: setup-python docker-image ## Install Python dependencies and build Yamcs
 .PHONY: prepare
 prepare: patch-events ## Render configuration and generate the XTCE MDB
 	@$(UV_RUN) proves-yamcs-prepare \
-	  --input-dir $(INPUT_DIR) \
+	  --deployments-file $(DEPLOYMENTS) \
 	  --runtime-dir $(RUNTIME_DIR) \
 	  --template-dir config/etc
 
 .PHONY: yamcs-config-check
 yamcs-config-check: docker-image prepare ## Validate generated configuration with yamcsd
-	$(COMPOSE) run --rm --no-deps yamcs \
+	$(COMPOSE_RUNTIME) run --rm --no-deps yamcs \
 	  --check --no-color --etc-dir /yamcs-config/etc \
 	  --data-dir /yamcs-data --cache-dir /yamcs-cache
 
@@ -79,15 +79,13 @@ yamcs-mdb: yamcs-dict ## Alias for yamcs-dict
 
 .PHONY: yamcs-server
 yamcs-server: yamcs-dict ## Start Yamcs and Grafana (no gateway / event bridge)
-	$(COMPOSE) up yamcs grafana
+	$(COMPOSE_RUNTIME) up yamcs grafana
 
 .PHONY: yamcs
 yamcs: yamcs-dict ## Start Yamcs, Grafana, the event bridge, and the multi-GS gateway
 	$(UV_RUN) proves-yamcs-supervisor run \
-	  --input-dir $(INPUT_DIR) \
 	  --yamcs-url $(YAMCS_URL) \
-	  --grafana-url $(GRAFANA_URL) \
-	  --instance $(YAMCS_INSTANCE)
+	  --grafana-url $(GRAFANA_URL)
 
 .PHONY: yamcs-stop
 yamcs-stop: venv ## Stop only this project's stack and owned processes
@@ -97,8 +95,7 @@ yamcs-stop: venv ## Stop only this project's stack and owned processes
 yamcs-build-check: yamcs-dict ## Boot Yamcs + Grafana, verify readiness, and tear it down
 	$(UV_RUN) proves-yamcs-supervisor check \
 	  --yamcs-url $(YAMCS_URL) \
-	  --grafana-url $(GRAFANA_URL) \
-	  --instance $(YAMCS_INSTANCE)
+	  --grafana-url $(GRAFANA_URL)
 
 .PHONY: test
 test: venv ## Run server unit tests
@@ -106,8 +103,7 @@ test: venv ## Run server unit tests
 
 .PHONY: test-yamcs
 test-yamcs: venv ## Run the manual live-board Yamcs round-trip test
-	YAMCS_URL=$(YAMCS_URL) YAMCS_INSTANCE=$(YAMCS_INSTANCE) \
-	  $(UV_RUN) pytest tests/integration
+	YAMCS_URL=$(YAMCS_URL) $(UV_RUN) pytest tests/integration
 
 .PHONY: fmt
 fmt: venv ## Check Python formatting and linting

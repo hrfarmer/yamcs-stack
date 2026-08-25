@@ -20,15 +20,15 @@ datasources:
           authEnabled: false
           protobuf: true
       endpoints:
-        fprime_realtime:
-          name: fprime-project realtime
-          description: Live processor for the fprime-project instance
+        proves-flight_realtime:
+          name: proves-flight realtime
+          description: Live processor for the proves-flight instance
           host: yamcs
-          instance: fprime-project
+          instance: proves-flight
           processor: realtime
-        fprime_replay:
-          name: fprime-project replay
-          description: Archive replay processor for the fprime-project instance
+        proves-flight_replay:
+          name: proves-flight replay
+          description: Archive replay processor for the proves-flight instance
           host: yamcs
-          instance: fprime-project
+          instance: proves-flight
           processor: replay

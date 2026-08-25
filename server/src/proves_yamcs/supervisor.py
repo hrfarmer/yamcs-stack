@@ -12,9 +12,15 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from pathlib import Path
 
+from proves_yamcs.deployments import RuntimeManifest, load_runtime_manifest
+
 PID_FILE = Path("runtime/pids/supervisor.json")
+DEFAULT_MANIFEST = Path("runtime/config/deployments.json")
+COMPOSE_FILE = Path("compose.yaml")
+COMPOSE_UDP = Path("runtime/compose.udp.yaml")
 
 
 def _compose(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -32,7 +38,10 @@ def _compose(*args: str, check: bool = True) -> subprocess.CompletedProcess:
         command = [executable]
     else:
         raise RuntimeError("Docker Compose is not installed")
-    return subprocess.run([*command, *args], check=check)
+    files = ["-f", str(COMPOSE_FILE)]
+    if COMPOSE_UDP.is_file():
+        files.extend(["-f", str(COMPOSE_UDP)])
+    return subprocess.run([*command, *files, *args], check=check)
 
 
 def _http_json(url: str) -> dict | list:
@@ -41,21 +50,31 @@ def _http_json(url: str) -> dict | list:
 
 
 def wait_until_ready(url: str, instance: str, timeout: int = 180) -> None:
+    wait_until_instances_ready(url, [instance], timeout)
+
+
+def wait_until_instances_ready(
+    url: str, instances: Sequence[str], timeout: int = 180
+) -> None:
     deadline = time.monotonic() + timeout
+    remaining = set(instances)
     last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            state = _http_json(f"{url}/api/instances/{instance}")
-            if isinstance(state, dict) and state.get("state") == "RUNNING":
-                print(f"Yamcs instance {instance} is RUNNING")
-                return
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            last_error = exc
-        time.sleep(1)
-    raise TimeoutError(
-        f"Yamcs instance {instance} did not become ready within {timeout}s: "
-        f"{last_error}"
-    )
+    while remaining and time.monotonic() < deadline:
+        for instance in list(remaining):
+            try:
+                state = _http_json(f"{url}/api/instances/{instance}")
+                if isinstance(state, dict) and state.get("state") == "RUNNING":
+                    print(f"Yamcs instance {instance} is RUNNING")
+                    remaining.discard(instance)
+            except (OSError, ValueError, urllib.error.URLError) as exc:
+                last_error = exc
+        if remaining:
+            time.sleep(1)
+    if remaining:
+        raise TimeoutError(
+            f"Yamcs instances {sorted(remaining)} did not become ready "
+            f"within {timeout}s: {last_error}"
+        )
 
 
 def wait_until_grafana_ready(url: str, timeout: int = 180) -> None:
@@ -121,21 +140,25 @@ def stop() -> None:
     PID_FILE.unlink(missing_ok=True)
 
 
+def _load_manifest(path: Path) -> RuntimeManifest:
+    return load_runtime_manifest(path)
+
+
 def run(args: argparse.Namespace) -> int:
     stop()
+    manifest = _load_manifest(args.manifest)
     _compose_stack()
-    wait_until_ready(args.yamcs_url, args.instance, args.timeout)
+    wait_until_instances_ready(
+        args.yamcs_url,
+        [item.instance for item in manifest.deployments],
+        args.timeout,
+    )
     wait_until_grafana_ready(args.grafana_url, args.timeout)
 
-    dictionary = (args.input_dir / "fprime-dictionary.json").resolve()
-    event_command = [
+    event_command_base = [
         str(Path(sys.executable).with_name("fprime-yamcs-events")),
         "--yamcs-url",
         args.yamcs_url,
-        "--instance",
-        args.instance,
-        "--dictionary",
-        str(dictionary),
     ]
     gateway_command = [
         sys.executable,
@@ -151,24 +174,34 @@ def run(args: argparse.Namespace) -> int:
         str(args.tc_from_yamcs_port),
         "--yamcs-tm-host",
         args.yamcs_tm_host,
-        "--yamcs-tm-port",
-        str(args.yamcs_tm_port),
         "--yamcs-url",
         args.yamcs_url,
-        "--yamcs-instance",
-        args.instance,
+        "--manifest",
+        str(args.manifest),
         "--dedup-window",
         str(args.dedup_window),
     ]
 
-    event_process = subprocess.Popen(event_command, start_new_session=True)
+    event_processes = [
+        subprocess.Popen(
+            [
+                *event_command_base,
+                "--instance",
+                item.instance,
+                "--dictionary",
+                item.dictionary,
+            ],
+            start_new_session=True,
+        )
+        for item in manifest.deployments
+    ]
     gateway_process = subprocess.Popen(gateway_command, start_new_session=True)
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(
         json.dumps(
             {
                 "supervisor": os.getpid(),
-                "events": event_process.pid,
+                "events": [process.pid for process in event_processes],
                 "gateway": gateway_process.pid,
             }
         ),
@@ -186,17 +219,19 @@ def run(args: argparse.Namespace) -> int:
     try:
         while not stopping:
             gateway_status = gateway_process.poll()
-            event_status = event_process.poll()
             if gateway_status is not None:
                 return gateway_status
-            if event_status is not None:
-                raise RuntimeError(
-                    f"event bridge exited unexpectedly with {event_status}"
-                )
+            for process in event_processes:
+                event_status = process.poll()
+                if event_status is not None:
+                    raise RuntimeError(
+                        f"event bridge exited unexpectedly with {event_status}"
+                    )
             time.sleep(0.25)
     finally:
         _terminate(gateway_process)
-        _terminate(event_process)
+        for process in event_processes:
+            _terminate(process)
         _compose("down", "--remove-orphans", check=False)
         PID_FILE.unlink(missing_ok=True)
     return 0
@@ -204,46 +239,70 @@ def run(args: argparse.Namespace) -> int:
 
 def check_server(args: argparse.Namespace) -> int:
     _compose("down", "--remove-orphans", check=False)
+    manifest = _load_manifest(args.manifest)
     try:
         _compose_stack()
-        wait_until_ready(args.yamcs_url, args.instance, args.timeout)
+        wait_until_instances_ready(
+            args.yamcs_url,
+            [item.instance for item in manifest.deployments],
+            args.timeout,
+        )
         wait_until_grafana_ready(args.grafana_url, args.timeout)
         server = _http_json(f"{args.yamcs_url}/api")
         if not isinstance(server, dict) or not server.get("yamcsVersion"):
             raise RuntimeError("Yamcs server metadata did not include a version")
-        commands = _http_json(
-            f"{args.yamcs_url}/api/mdb/{args.instance}/commands?limit=1"
-        )
-        parameters = _http_json(
-            f"{args.yamcs_url}/api/mdb/{args.instance}/parameters?limit=1"
-        )
-        links = _http_json(f"{args.yamcs_url}/api/links/{args.instance}")
-        if not isinstance(commands, dict) or not commands.get("commands"):
-            raise RuntimeError("Yamcs MDB did not expose any commands")
-        if not isinstance(parameters, dict) or not parameters.get("parameters"):
-            raise RuntimeError("Yamcs MDB did not expose any parameters")
-        if not isinstance(links, dict):
-            raise RuntimeError("Yamcs links endpoint returned an invalid response")
-        link_states = {
-            link.get("name"): link.get("status") for link in links.get("links", [])
-        }
-        unhealthy = [
-            name
-            for name in ("UDP_TM_IN", "UDP_TC_OUT")
-            if link_states.get(name) != "OK"
-        ]
-        if unhealthy:
-            raise RuntimeError(f"Yamcs links are not healthy: {', '.join(unhealthy)}")
+        for item in manifest.deployments:
+            commands = _http_json(
+                f"{args.yamcs_url}/api/mdb/{item.instance}/commands?limit=1"
+            )
+            parameters = _http_json(
+                f"{args.yamcs_url}/api/mdb/{item.instance}/parameters?limit=1"
+            )
+            links = _http_json(f"{args.yamcs_url}/api/links/{item.instance}")
+            if not isinstance(commands, dict) or not commands.get("commands"):
+                raise RuntimeError(
+                    f"Yamcs MDB for {item.instance} did not expose any commands"
+                )
+            if not isinstance(parameters, dict) or not parameters.get("parameters"):
+                raise RuntimeError(
+                    f"Yamcs MDB for {item.instance} did not expose any parameters"
+                )
+            if not isinstance(links, dict):
+                raise RuntimeError(
+                    f"Yamcs links endpoint for {item.instance} returned an "
+                    "invalid response"
+                )
+            link_states = {
+                link.get("name"): link.get("status") for link in links.get("links", [])
+            }
+            unhealthy = [
+                name
+                for name in ("UDP_TM_IN", "UDP_TC_OUT")
+                if link_states.get(name) != "OK"
+            ]
+            if unhealthy:
+                raise RuntimeError(
+                    f"Yamcs links for {item.instance} are not healthy: "
+                    f"{', '.join(unhealthy)}"
+                )
         archive_root = Path("runtime/data")
         archive_identities = {
             path.relative_to(archive_root): path.read_bytes()
             for path in archive_root.glob("*.rdb/IDENTITY")
         }
-        if Path(f"{args.instance}.rdb/IDENTITY") not in archive_identities:
-            raise RuntimeError("Yamcs did not create persistent archive data")
+        for item in manifest.deployments:
+            identity = Path(f"{item.instance}.rdb/IDENTITY")
+            if identity not in archive_identities:
+                raise RuntimeError(
+                    f"Yamcs did not create persistent archive data for {item.instance}"
+                )
 
         _compose("restart", "yamcs")
-        wait_until_ready(args.yamcs_url, args.instance, args.timeout)
+        wait_until_instances_ready(
+            args.yamcs_url,
+            [item.instance for item in manifest.deployments],
+            args.timeout,
+        )
         if any(
             not (archive_root / path).is_file()
             or (archive_root / path).read_bytes() != identity
@@ -275,24 +334,22 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("--input-dir", type=Path, default=Path("inputs/proves"))
+    run_parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     run_parser.add_argument("--yamcs-url", default="http://localhost:8090")
     run_parser.add_argument("--grafana-url", default="http://localhost:3000")
-    run_parser.add_argument("--instance", default="fprime-project")
     run_parser.add_argument("--timeout", type=int, default=180)
     run_parser.add_argument("--gateway-api-host", default="0.0.0.0")
     run_parser.add_argument("--gateway-api-port", type=int, default=8091)
     run_parser.add_argument("--tm-ingest-port", type=int, default=51000)
     run_parser.add_argument("--tc-from-yamcs-port", type=int, default=50001)
     run_parser.add_argument("--yamcs-tm-host", default="127.0.0.1")
-    run_parser.add_argument("--yamcs-tm-port", type=int, default=50000)
     run_parser.add_argument("--dedup-window", type=float, default=1.5)
 
     subparsers.add_parser("stop")
     check_parser = subparsers.add_parser("check")
+    check_parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     check_parser.add_argument("--yamcs-url", default="http://localhost:8090")
     check_parser.add_argument("--grafana-url", default="http://localhost:3000")
-    check_parser.add_argument("--instance", default="fprime-project")
     check_parser.add_argument("--timeout", type=int, default=180)
     return parser
 

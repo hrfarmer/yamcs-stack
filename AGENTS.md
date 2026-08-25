@@ -23,8 +23,8 @@ Notes below cover only non-obvious setup/run caveats.
   targets, not a global `python`/`uv`.
 - The dependency-refresh update script only installs Python deps and renders the
   Yamcs runtime config (`server: make setup-python && make prepare
-  INPUT_DIR=tests/fixtures/proves`, `client: make setup`). Docker and service
-  startup are intentionally NOT in it (see below).
+  DEPLOYMENTS=tests/fixtures/deployments.toml`, `client: make setup`). Docker
+  and service startup are intentionally NOT in it (see below).
 
 ### Docker / Yamcs (required for the server stack)
 - Yamcs runs only in Docker. Docker is **not preinstalled** on the base VM; the
@@ -43,17 +43,24 @@ Notes below cover only non-obvious setup/run caveats.
   Maven builder stage: `cd server && make docker-image`. No host Maven/JDK needed.
   Grafana uses `grafana/grafana:13.0.7` from Docker Hub and installs
   `jaops-yamcs-app` on first start (`GF_INSTALL_PLUGINS`).
+- After `make prepare`, Docker Compose must include the generated UDP overlay:
+  `compose.yaml` plus `runtime/compose.udp.yaml` (the Makefiles and supervisor
+  pass both automatically).
 
 ### Running and testing
 - Boot the whole server stack (Yamcs + Grafana + gateway + event bridge) with
-  `cd server && make yamcs INPUT_DIR=tests/fixtures/proves`. It runs in the
-  foreground as a supervisor; stop it with `make yamcs-stop`. Yamcs web UI is
-  `http://localhost:8090` (no auth in dev), Grafana `http://localhost:3000`
-  (anonymous Admin, JAOPS Yamcs plugin, home dashboard **PROVES Yamcs Overview**),
-  gateway UI `http://localhost:8091`.
+  `cd server && make yamcs DEPLOYMENTS=tests/fixtures/deployments.toml`. It runs
+  in the foreground as a supervisor; stop it with `make yamcs-stop`. Yamcs web
+  UI is `http://localhost:8090` (no auth in dev; instance selector picks the
+  satellite), Grafana `http://localhost:3000` (anonymous Admin, JAOPS Yamcs
+  plugin, home dashboard **PROVES Yamcs Overview**), gateway UI
+  `http://localhost:8091`.
 - Because there is no committed flight dictionary, always pass
-  `INPUT_DIR=tests/fixtures/proves` to `make prepare` / `make yamcs*` targets
-  (matches CI); otherwise Yamcs config rendering has no input bundle.
+  `DEPLOYMENTS=tests/fixtures/deployments.toml` to `make prepare` / `make yamcs*`
+  targets (matches CI); the default `config/deployments.toml` points at
+  `inputs/proves`, which is empty in this repo.
+- Each `[[deployment]]` in the TOML becomes one Yamcs instance (own XTCE, SCID,
+  TM UDP port). The gateway routes TM by CCSDS spacecraft ID.
 - `make test` runs unit tests only (`tests/unit`). The server `tests/integration`
   suite and `scripts/run_e2e_sim.sh` require a live/simulated spacecraft (the e2e
   script builds `fprime-yamcs-reference` in C++), so they will not pass against a

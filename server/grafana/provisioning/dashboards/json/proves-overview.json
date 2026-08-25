@@ -29,7 +29,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/links/UDP_TM_IN/dataInRate",
           "asVariable": false
         }
@@ -66,7 +66,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/links/UDP_TC_OUT/dataOutRate",
           "asVariable": false
         }
@@ -102,7 +102,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/links/UDP_TM_IN/dataInCount",
           "asVariable": false
         }
@@ -138,7 +138,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/cmdQueue/default/numSentCommands",
           "asVariable": false
         }
@@ -174,7 +174,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/jvm/memoryUsed",
           "asVariable": false
         },
@@ -182,7 +182,7 @@
           "refId": "B",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/jvm/totalMemory",
           "asVariable": false
         }
@@ -218,7 +218,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "plot",
-          "endpoint": "fprime_realtime",
+          "endpoint": "proves-flight_realtime",
           "parameter": "/yamcs/proves-central/jvm/threadCount",
           "asVariable": false
         }
@@ -254,7 +254,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "command-history",
-          "endpoint": "fprime_realtime"
+          "endpoint": "proves-flight_realtime"
         }
       ],
       "fieldConfig": { "defaults": {}, "overrides": [] },
@@ -271,7 +271,7 @@
           "refId": "A",
           "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
           "type": "events",
-          "endpoint": "fprime_realtime"
+          "endpoint": "proves-flight_realtime"
         }
       ],
       "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },

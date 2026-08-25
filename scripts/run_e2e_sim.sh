@@ -15,8 +15,9 @@ FPRIME_UDP_PORT="${FPRIME_UDP_PORT:-52000}"
 CLIENT_TC_PORT="${CLIENT_TC_PORT:-51001}"
 BRIDGE_TCP_PORT="${BRIDGE_TCP_PORT:-5000}"
 YAMCS_URL="${YAMCS_URL:-http://127.0.0.1:8090}"
-YAMCS_INSTANCE="${YAMCS_INSTANCE:-fprime-project}"
+YAMCS_INSTANCE="${YAMCS_INSTANCE:-proves-flight}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
+DEPLOYMENTS_FILE="$WORK/deployments.toml"
 KEEP_ALIVE="${E2E_KEEP_ALIVE:-0}"
 SKIP_TEST="${E2E_SKIP_TEST:-0}"
 
@@ -59,9 +60,9 @@ cleanup() {
   done
   (
     cd "$ROOT/server"
-    docker compose ps >"$LOG_DIR/compose-ps.txt" 2>&1 || true
-    docker compose logs --no-color >"$LOG_DIR/compose.log" 2>&1 || true
-    docker compose down --remove-orphans
+    docker compose -f compose.yaml -f runtime/compose.udp.yaml ps >"$LOG_DIR/compose-ps.txt" 2>&1 || true
+    docker compose -f compose.yaml -f runtime/compose.udp.yaml logs --no-color >"$LOG_DIR/compose.log" 2>&1 || true
+    docker compose -f compose.yaml -f runtime/compose.udp.yaml down --remove-orphans
   ) >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -139,11 +140,16 @@ log "binary: $BIN_SRC"
 log "frame length: $FRAME_LENGTH"
 
 log "preparing server + client environments"
+cat >"$DEPLOYMENTS_FILE" <<EOF
+[[deployment]]
+name = "$YAMCS_INSTANCE"
+input_dir = "$BUNDLE_DIR"
+EOF
 (
   cd "$ROOT/server"
   make setup-python
   make docker-image
-  make prepare INPUT_DIR="$BUNDLE_DIR"
+  make prepare DEPLOYMENTS="$DEPLOYMENTS_FILE"
 )
 (
   cd "$ROOT/client"
@@ -154,10 +160,10 @@ log "starting Yamcs + Grafana (uid=$YAMCS_UID gid=$YAMCS_GID)"
 (
   cd "$ROOT/server"
   # Fail fast on bad XTCE/config before the readiness wait.
-  docker compose run --rm --no-deps yamcs \
+  docker compose -f compose.yaml -f runtime/compose.udp.yaml run --rm --no-deps yamcs \
     --check --no-color --etc-dir /yamcs-config/etc \
     --data-dir /yamcs-data --cache-dir /yamcs-cache
-  docker compose up -d yamcs grafana
+  docker compose -f compose.yaml -f runtime/compose.udp.yaml up -d yamcs grafana
 )
 "$ROOT/server/.venv/bin/python" - <<PY
 from proves_yamcs.supervisor import wait_until_grafana_ready, wait_until_ready
@@ -176,7 +182,7 @@ PIDS+=($!)
 log "starting gateway"
 "$ROOT/server/.venv/bin/proves-yamcs-gateway" \
   --yamcs-url "$YAMCS_URL" \
-  --yamcs-instance "$YAMCS_INSTANCE" \
+  --manifest "$ROOT/server/runtime/config/deployments.json" \
   >"$LOG_DIR/gateway.log" 2>&1 &
 PIDS+=($!)
 
@@ -200,15 +206,18 @@ log "starting GS client"
 CLIENT_CONFIG="$WORK/gs-client.toml"
 cat >"$CLIENT_CONFIG" <<EOF
 mode = "tcp"
-input_dir = "$BUNDLE_DIR"
 server_host = "127.0.0.1"
 station_name = "ci-gs"
-skip_auth = true
 tcp_host = "127.0.0.1"
 tcp_port = $BRIDGE_TCP_PORT
 tc_listen_port = $CLIENT_TC_PORT
 tc_advertise_host = "127.0.0.1"
 heartbeat_interval = 2.0
+
+[[satellite]]
+name = "$YAMCS_INSTANCE"
+input_dir = "$BUNDLE_DIR"
+skip_auth = true
 sequence_number_file = "$WORK/client-sequence"
 EOF
 "$ROOT/client/.venv/bin/proves-gs-client" \

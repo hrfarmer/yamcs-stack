@@ -6,7 +6,9 @@ Grafana runs next to Yamcs in `compose.yaml` and is provisioned with the
 - URL: <http://localhost:3000>
 - Auth: anonymous Admin (same development posture as Yamcs). Default login
   `admin` / `admin` is also available if the login form is re-enabled.
-- Datasource: `JAOPS Yamcs` → `yamcs:8090` / instance `fprime-project`
+- Datasource: `JAOPS Yamcs` → `yamcs:8090` / instance `proves-flight`
+  (matches `config/deployments.toml`; add endpoints for extra `[[deployment]]`
+  names if you host more than one satellite)
 - Home dashboard: **PROVES Yamcs Overview** (link rates, JVM, command history,
   events)
 

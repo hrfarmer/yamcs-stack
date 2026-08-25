@@ -22,7 +22,7 @@ jobs:
 
       - name: Build and boot Yamcs
         run: |
-          make yamcs-build-check INPUT_DIR=tests/fixtures/proves
+          make yamcs-build-check DEPLOYMENTS=tests/fixtures/deployments.toml
 
       - name: Capture container logs
         if: failure()
