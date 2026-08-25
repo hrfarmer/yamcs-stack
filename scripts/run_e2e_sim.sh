@@ -72,8 +72,8 @@ log "building YamcsDeployment"
   fprime-util build
 )
 
-DICT_SRC="$(find "$DEPLOY/build-artifacts" -name '*Dictionary.json' -print -quit)"
-BIN_SRC="$(find "$DEPLOY/build-artifacts" -type f -path '*/bin/YamcsDeployment' -print -quit)"
+DICT_SRC="$(find "$FPRIME_REF_DIR/build-artifacts" -name '*Dictionary.json' -print -quit)"
+BIN_SRC="$(find "$FPRIME_REF_DIR/build-artifacts" -type f \( -name 'YamcsDeployment' -o -name 'FprimeYamcsReference_YamcsDeployment' \) -path '*/bin/*' -print -quit)"
 test -n "$DICT_SRC" && test -f "$DICT_SRC"
 test -n "$BIN_SRC" && test -x "$BIN_SRC"
 cp "$DICT_SRC" "$BUNDLE_DIR/fprime-dictionary.json"
