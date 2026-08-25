@@ -10,8 +10,6 @@ def bundle(tmp_path: Path) -> RuntimeBundle:
     return RuntimeBundle(
         directory=tmp_path,
         dictionary_path=tmp_path / "fprime-dictionary.json",
-        auth_key_path=tmp_path / "auth-key.hex",
-        auth_key="00" * 16,
         spacecraft_id=68,
         frame_length=248,
     )
@@ -19,13 +17,21 @@ def bundle(tmp_path: Path) -> RuntimeBundle:
 
 def test_render_configuration_substitutes_all_dynamic_values(tmp_path):
     runtime = tmp_path / "runtime"
-    config = render_configuration(bundle(tmp_path), Path("config/etc"), runtime)
+    config = render_configuration(
+        bundle(tmp_path),
+        Path("config/etc"),
+        runtime,
+        tm_root_container="/ReferenceDeployment_ReferenceDeployment/CCSDSSpacePacket",
+    )
 
     instance = (config / "etc/yamcs.fprime-project.yaml").read_text(encoding="utf-8")
     assert "@SPACECRAFT_ID@" not in instance
     assert "@FRAME_LENGTH@" not in instance
+    assert "@TM_ROOT_CONTAINER@" not in instance
     assert instance.count("spacecraftId: 68") == 2
     assert instance.count("248") == 3
+    assert "/ReferenceDeployment_ReferenceDeployment/CCSDSSpacePacket" in instance
+    assert (config / "mdb/ground-control.xtce.xml").is_file()
 
     secret_file = runtime / "secrets/yamcs-secret-key"
     assert secret_file.stat().st_mode & 0o777 == 0o600
@@ -34,7 +40,7 @@ def test_render_configuration_substitutes_all_dynamic_values(tmp_path):
     ).read_text(encoding="utf-8")
 
 
-def test_validate_xtce_requires_expected_root(tmp_path):
+def test_validate_xtce_requires_root_container(tmp_path):
     valid = tmp_path / "valid.xml"
     valid.write_text(
         '<SpaceSystem name="ReferenceDeployment_ReferenceDeployment">'
@@ -45,8 +51,8 @@ def test_validate_xtce_requires_expected_root(tmp_path):
     validate_xtce(valid)
 
     invalid = tmp_path / "invalid.xml"
-    invalid.write_text('<SpaceSystem name="wrong"/>', encoding="utf-8")
-    with pytest.raises(ValueError, match="root space system"):
+    invalid.write_text('<SpaceSystem name="anything"/>', encoding="utf-8")
+    with pytest.raises(ValueError, match="root container"):
         validate_xtce(invalid)
 
 

@@ -8,7 +8,7 @@ import os
 import threading
 from pathlib import Path
 
-from proves_yamcs.bundle import AUTH_KEY_PATTERN, BundleError, load_auth_key
+from proves_gs.bundle import AUTH_KEY_PATTERN, BundleError, load_auth_key
 
 
 class SequenceStore:

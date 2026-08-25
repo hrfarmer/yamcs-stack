@@ -6,21 +6,18 @@ TOOLS_DIR ?= $(ROOT)/.tools
 UV_DIR ?= $(TOOLS_DIR)/uv-$(UV_VERSION)
 UV ?= $(UV_DIR)/uv
 UV_RUN := $(UV) run --project $(ROOT)
-COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+COMPOSE ?= $(shell \
+	if docker compose version >/dev/null 2>&1; then echo "docker compose"; \
+	elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; \
+	else echo "docker compose"; fi)
 
 INPUT_DIR ?= inputs/proves
 RUNTIME_DIR ?= runtime
-YAMCS_HOST ?= 127.0.0.1
 YAMCS_URL ?= http://localhost:8090
 YAMCS_INSTANCE ?= fprime-project
-UART_BAUD ?= 115200
-GS_PORT ?= 5000
 YAMCS_UID ?= $(shell id -u)
 YAMCS_GID ?= $(shell id -g)
 export YAMCS_UID YAMCS_GID
-
-SPACECRAFT_ARG := $(if $(SPACECRAFT_ID),--spacecraft-id $(SPACECRAFT_ID),)
-FRAME_LENGTH_ARG := $(if $(FRAME_LENGTH),--frame-length $(FRAME_LENGTH),)
 
 .PHONY: help
 help: ## Show available targets
@@ -36,7 +33,7 @@ $(UV): | $(TOOLS_DIR)
 	@test -s $(UV) || { mkdir -p $(UV_DIR); curl -LsSf https://astral.sh/uv/$(UV_VERSION)/install.sh | UV_UNMANAGED_INSTALL=$(UV_DIR) sh >/dev/null; }
 
 .PHONY: venv
-venv: uv ## Synchronize the standalone Python environment
+venv: uv ## Synchronize the server Python environment
 	@$(UV) sync --project $(ROOT) --frozen
 
 .PHONY: patch-events
@@ -45,12 +42,22 @@ patch-events: venv
 	  test -n "$$EVENT_PROCESSOR" || { echo "fprime-yamcs event processor was not installed" >&2; exit 1; }; \
 	  $(ROOT)/.venv/bin/python $(ROOT)/tools/apply_events_cpu_fix.py "$$EVENT_PROCESSOR"
 
+.PHONY: ensure-docker
+ensure-docker: ## Require a working Docker engine and Compose
+	@command -v docker >/dev/null || { echo "docker is not installed" >&2; exit 1; }
+	@docker info >/dev/null 2>&1 || { echo "docker daemon is not running" >&2; exit 1; }
+	@$(COMPOSE) version >/dev/null 2>&1 || { \
+	  echo "Docker Compose is unavailable (tried: $(COMPOSE))" >&2; exit 1; }
+
 .PHONY: docker-image
-docker-image: ## Build the pinned Yamcs Docker image
+docker-image: ensure-docker ## Build the pinned Yamcs Docker image
 	$(COMPOSE) build yamcs
 
+.PHONY: setup-python
+setup-python: patch-events ## Install Python deps and patch fprime-yamcs-events
+
 .PHONY: setup
-setup: patch-events docker-image ## Install Python dependencies and build Yamcs
+setup: setup-python docker-image ## Install Python dependencies and build Yamcs
 
 .PHONY: prepare
 prepare: patch-events ## Render configuration and generate the XTCE MDB
@@ -74,27 +81,11 @@ yamcs-server: yamcs-dict ## Start only the central Yamcs Docker server
 	$(COMPOSE) up yamcs
 
 .PHONY: yamcs
-yamcs: yamcs-dict ## Start Yamcs, the event bridge, and the serial adapter
-	@test -n "$(UART_DEVICE)" || { echo "Error: set UART_DEVICE=/dev/ttyXXX" >&2; exit 1; }
+yamcs: yamcs-dict ## Start Yamcs, the event bridge, and the multi-GS gateway
 	$(UV_RUN) proves-yamcs-supervisor run \
 	  --input-dir $(INPUT_DIR) \
-	  --uart-device $(UART_DEVICE) \
-	  --uart-baud $(UART_BAUD) \
-	  --yamcs-host $(YAMCS_HOST) \
 	  --yamcs-url $(YAMCS_URL) \
-	  --instance $(YAMCS_INSTANCE) \
-	  $(SPACECRAFT_ARG) $(FRAME_LENGTH_ARG)
-
-.PHONY: yamcs-adapter-tcp
-yamcs-adapter-tcp: patch-events ## Run the bent-pipe TCP adapter
-	@test -n "$(GS_HOST)" || { echo "Error: set GS_HOST" >&2; exit 1; }
-	$(UV_RUN) proves-yamcs-adapter \
-	  --mode tcp \
-	  --input-dir $(INPUT_DIR) \
-	  --tcp-host $(GS_HOST) \
-	  --tcp-port $(GS_PORT) \
-	  --yamcs-host $(YAMCS_HOST) \
-	  $(SPACECRAFT_ARG) $(FRAME_LENGTH_ARG)
+	  --instance $(YAMCS_INSTANCE)
 
 .PHONY: yamcs-stop
 yamcs-stop: venv ## Stop only this project's stack and owned processes
@@ -107,7 +98,7 @@ yamcs-build-check: yamcs-dict ## Boot Yamcs, verify readiness, and tear it down
 	  --instance $(YAMCS_INSTANCE)
 
 .PHONY: test
-test: venv ## Run standalone unit tests
+test: venv ## Run server unit tests
 	$(UV_RUN) pytest tests/unit
 
 .PHONY: test-yamcs
@@ -119,3 +110,7 @@ test-yamcs: venv ## Run the manual live-board Yamcs round-trip test
 fmt: venv ## Check Python formatting and linting
 	$(UV_RUN) ruff format --check src tests tools
 	$(UV_RUN) ruff check src tests tools
+
+.PHONY: lock
+lock: uv ## Refresh uv.lock after dependency changes
+	@$(UV) lock --project $(ROOT)

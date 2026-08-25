@@ -1,19 +1,13 @@
-name: Yamcs server
+name: Yamcs stack
 
 on:
   pull_request:
-    paths:
-      - "server/**"
-      - ".github/workflows/server-ci.yml"
   push:
     branches:
       - main
-    paths:
-      - "server/**"
-      - ".github/workflows/server-ci.yml"
 
 jobs:
-  test:
+  server:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,5 +43,44 @@ jobs:
           path: |
             server/runtime/compose-ps.txt
             server/runtime/compose.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  client:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Unit tests and formatting
+        run: |
+          make test
+          make fmt
+
+  e2e-sim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git python3-venv default-jdk maven
+
+      - name: Full-stack F´ + Yamcs + GS client simulation
+        run: |
+          chmod +x scripts/run_e2e_sim.sh
+          scripts/run_e2e_sim.sh
+
+      - name: Upload e2e logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-sim-logs
+          path: |
+            .e2e/logs/
           if-no-files-found: ignore
           retention-days: 7

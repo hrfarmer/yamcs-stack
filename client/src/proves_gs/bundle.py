@@ -1,4 +1,4 @@
-"""Validation and loading for a PROVES Yamcs server input bundle."""
+"""Validation and loading for a PROVES ground-station runtime bundle."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class BundleError(ValueError):
 
 @dataclass(frozen=True)
 class RuntimeBundle:
-    """Validated paths and values needed by the Yamcs server."""
+    """Validated paths and values needed by the ground-station client."""
 
     directory: Path
     dictionary_path: Path
@@ -69,13 +69,9 @@ def load_auth_key(path: Path) -> str:
 
 
 def load_bundle(
-    input_dir: str | Path, *, require_auth_key: bool = False
+    input_dir: str | Path, *, require_auth_key: bool = True
 ) -> RuntimeBundle:
-    """Load and validate the server input contract.
-
-    The central server only needs the F Prime dictionary. The HMAC auth key is
-    used by ground-station clients and is optional here.
-    """
+    """Load and validate the ground-station input contract."""
     directory = Path(input_dir).expanduser().resolve()
     dictionary_path = directory / DICTIONARY_FILENAME
     auth_key_path = directory / AUTH_KEY_FILENAME
@@ -104,7 +100,7 @@ def load_bundle(
 
     auth_key = None
     resolved_auth_path: Path | None = None
-    if auth_key_path.is_file() or require_auth_key:
+    if require_auth_key or auth_key_path.is_file():
         auth_key = load_auth_key(auth_key_path)
         resolved_auth_path = auth_key_path
 

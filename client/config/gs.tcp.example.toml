@@ -1,0 +1,15 @@
+# Example TCP bent-pipe ground-station client config.
+# Copy and edit, then:
+#   make run CONFIG=config/gs.toml
+
+mode = "tcp"
+input_dir = "inputs/proves"
+server_host = "127.0.0.1"
+station_name = "gs-tcp"
+
+tcp_host = "127.0.0.1"
+tcp_port = 5000
+
+# tc_listen_port = 50001
+# tc_advertise_host = "100.x.y.z"
+# skip_auth = false

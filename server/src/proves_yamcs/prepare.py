@@ -13,8 +13,8 @@ from pathlib import Path
 
 from proves_yamcs.bundle import RuntimeBundle, load_bundle
 
-EXPECTED_SPACE_SYSTEM = "ReferenceDeployment_ReferenceDeployment"
-EXPECTED_ROOT_CONTAINER = "CCSDSSpacePacket"
+DEFAULT_ROOT_CONTAINER = "CCSDSSpacePacket"
+GROUND_XTCE_NAME = "ground-control.xtce.xml"
 
 
 def _atomic_text(path: Path, content: str, mode: int = 0o644) -> None:
@@ -44,11 +44,16 @@ def render_configuration(
     bundle: RuntimeBundle,
     template_dir: Path,
     runtime_dir: Path,
+    *,
+    ground_xtce_source: Path | None = None,
+    tm_root_container: str = "/PLACEHOLDER/CCSDSSpacePacket",
 ) -> Path:
     """Render all server configuration and return its root directory."""
     config_dir = runtime_dir / "config"
     etc_dir = config_dir / "etc"
+    mdb_dir = config_dir / "mdb"
     etc_dir.mkdir(parents=True, exist_ok=True)
+    mdb_dir.mkdir(parents=True, exist_ok=True)
     secret = _server_secret(runtime_dir)
 
     global_template = (template_dir / "yamcs.yaml.template").read_text(encoding="utf-8")
@@ -60,11 +65,18 @@ def render_configuration(
     instance_template = (template_dir / "yamcs.fprime-project.yaml.template").read_text(
         encoding="utf-8"
     )
-    instance_config = instance_template.replace(
-        "@SPACECRAFT_ID@", str(bundle.spacecraft_id)
-    ).replace("@FRAME_LENGTH@", str(bundle.frame_length))
+    instance_config = (
+        instance_template.replace("@SPACECRAFT_ID@", str(bundle.spacecraft_id))
+        .replace("@FRAME_LENGTH@", str(bundle.frame_length))
+        .replace("@TM_ROOT_CONTAINER@", tm_root_container)
+    )
     _atomic_text(etc_dir / "yamcs.fprime-project.yaml", instance_config)
     shutil.copyfile(template_dir / "processor.yaml", etc_dir / "processor.yaml")
+
+    source = ground_xtce_source or (
+        Path(__file__).resolve().parents[2] / "config" / "mdb" / GROUND_XTCE_NAME
+    )
+    shutil.copyfile(source, mdb_dir / GROUND_XTCE_NAME)
     return config_dir
 
 
@@ -79,34 +91,52 @@ def generate_xtce(bundle: RuntimeBundle, config_dir: Path) -> Path:
     return output
 
 
+def xtce_space_system_name(path: Path) -> str:
+    root = ET.parse(path).getroot()
+    name = root.attrib.get("name")
+    if not name:
+        raise ValueError(f"XTCE root space system is missing a name: {path}")
+    return name
+
+
+def tm_root_container_path(xtce_path: Path) -> str:
+    space_system = xtce_space_system_name(xtce_path)
+    return f"/{space_system}/{DEFAULT_ROOT_CONTAINER}"
+
+
 def validate_xtce(path: Path) -> None:
     root = ET.parse(path).getroot()
-    if root.attrib.get("name") != EXPECTED_SPACE_SYSTEM:
-        raise ValueError(
-            f"XTCE root space system must be {EXPECTED_SPACE_SYSTEM!r}; "
-            f"got {root.attrib.get('name')!r}"
-        )
+    name = root.attrib.get("name")
+    if not name:
+        raise ValueError(f"XTCE root space system is missing a name: {path}")
     containers = {
         element.attrib.get("name")
         for element in root.iter()
         if element.tag.rsplit("}", 1)[-1] == "SequenceContainer"
     }
-    if EXPECTED_ROOT_CONTAINER not in containers:
+    if DEFAULT_ROOT_CONTAINER not in containers:
         raise ValueError(
-            f"XTCE does not contain required root container {EXPECTED_ROOT_CONTAINER!r}"
+            f"XTCE does not contain required root container {DEFAULT_ROOT_CONTAINER!r}"
         )
 
 
 def prepare(input_dir: Path, runtime_dir: Path, template_dir: Path) -> RuntimeBundle:
-    bundle = load_bundle(input_dir)
+    bundle = load_bundle(input_dir, require_auth_key=False)
     for directory in ("data", "cache", "pids", "state"):
         (runtime_dir / directory).mkdir(parents=True, exist_ok=True)
     config_dir = render_configuration(bundle, template_dir, runtime_dir)
-    generate_xtce(bundle, config_dir)
+    xtce_path = generate_xtce(bundle, config_dir)
+    root_container = tm_root_container_path(xtce_path)
+    render_configuration(
+        bundle,
+        template_dir,
+        runtime_dir,
+        tm_root_container=root_container,
+    )
     print(
         "Prepared Yamcs configuration "
-        f"(spacecraft ID {bundle.spacecraft_id}, frame length {bundle.frame_length}) "
-        f"at {config_dir}"
+        f"(spacecraft ID {bundle.spacecraft_id}, frame length {bundle.frame_length}, "
+        f"TM root {root_container}) at {config_dir}"
     )
     return bundle
 

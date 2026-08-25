@@ -1,4 +1,4 @@
-"""Own the local Yamcs container, event bridge, and transport adapter."""
+"""Own the central Yamcs container, event bridge, and multi-GS gateway."""
 
 from __future__ import annotations
 
@@ -106,35 +106,39 @@ def run(args: argparse.Namespace) -> int:
         "--dictionary",
         str(dictionary),
     ]
-    adapter_command = [
+    gateway_command = [
         sys.executable,
         "-m",
-        "proves_yamcs.adapter",
-        "--mode",
-        "serial",
-        "--input-dir",
-        str(args.input_dir),
-        "--uart-device",
-        args.uart_device,
-        "--uart-baud",
-        str(args.uart_baud),
-        "--yamcs-host",
-        args.yamcs_host,
+        "proves_yamcs.gateway",
+        "--api-host",
+        args.gateway_api_host,
+        "--api-port",
+        str(args.gateway_api_port),
+        "--tm-bind-port",
+        str(args.tm_ingest_port),
+        "--tc-bind-port",
+        str(args.tc_from_yamcs_port),
+        "--yamcs-tm-host",
+        args.yamcs_tm_host,
+        "--yamcs-tm-port",
+        str(args.yamcs_tm_port),
+        "--yamcs-url",
+        args.yamcs_url,
+        "--yamcs-instance",
+        args.instance,
+        "--dedup-window",
+        str(args.dedup_window),
     ]
-    if args.spacecraft_id:
-        adapter_command.extend(["--spacecraft-id", args.spacecraft_id])
-    if args.frame_length:
-        adapter_command.extend(["--frame-length", str(args.frame_length)])
 
     event_process = subprocess.Popen(event_command, start_new_session=True)
-    adapter_process = subprocess.Popen(adapter_command, start_new_session=True)
+    gateway_process = subprocess.Popen(gateway_command, start_new_session=True)
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     PID_FILE.write_text(
         json.dumps(
             {
                 "supervisor": os.getpid(),
                 "events": event_process.pid,
-                "adapter": adapter_process.pid,
+                "gateway": gateway_process.pid,
             }
         ),
         encoding="utf-8",
@@ -150,17 +154,17 @@ def run(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, request_stop)
     try:
         while not stopping:
-            adapter_status = adapter_process.poll()
+            gateway_status = gateway_process.poll()
             event_status = event_process.poll()
-            if adapter_status is not None:
-                return adapter_status
+            if gateway_status is not None:
+                return gateway_status
             if event_status is not None:
                 raise RuntimeError(
                     f"event bridge exited unexpectedly with {event_status}"
                 )
             time.sleep(0.25)
     finally:
-        _terminate(adapter_process)
+        _terminate(gateway_process)
         _terminate(event_process)
         _compose("down", "--remove-orphans", check=False)
         PID_FILE.unlink(missing_ok=True)
@@ -226,14 +230,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--input-dir", type=Path, default=Path("inputs/proves"))
-    run_parser.add_argument("--uart-device", required=True)
-    run_parser.add_argument("--uart-baud", type=int, default=115200)
-    run_parser.add_argument("--yamcs-host", default="127.0.0.1")
     run_parser.add_argument("--yamcs-url", default="http://localhost:8090")
     run_parser.add_argument("--instance", default="fprime-project")
-    run_parser.add_argument("--spacecraft-id")
-    run_parser.add_argument("--frame-length", type=int)
     run_parser.add_argument("--timeout", type=int, default=180)
+    run_parser.add_argument("--gateway-api-host", default="0.0.0.0")
+    run_parser.add_argument("--gateway-api-port", type=int, default=8091)
+    run_parser.add_argument("--tm-ingest-port", type=int, default=51000)
+    run_parser.add_argument("--tc-from-yamcs-port", type=int, default=50001)
+    run_parser.add_argument("--yamcs-tm-host", default="127.0.0.1")
+    run_parser.add_argument("--yamcs-tm-port", type=int, default=50000)
+    run_parser.add_argument("--dedup-window", type=float, default=1.5)
 
     subparsers.add_parser("stop")
     check_parser = subparsers.add_parser("check")

@@ -11,7 +11,8 @@ services:
     user: "${YAMCS_UID:-1000}:${YAMCS_GID:-1000}"
     ports:
       - "8090:8090"
-      - "50000:50000/udp"
+      # TM is fed by the host gateway on loopback only; GS clients talk to :51000.
+      - "127.0.0.1:50000:50000/udp"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

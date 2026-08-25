@@ -1,0 +1,4 @@
+{
+  "install": "set -eux\ncd /workspace/server\nmake setup-python\nmake prepare INPUT_DIR=tests/fixtures/proves\ncd /workspace/client\nmake setup\ntest -f /workspace/server/runtime/config/etc/yamcs.yaml\ntest -d /workspace/server/.venv\ntest -d /workspace/client/.venv",
+  "start": "set -eux\nif ! command -v docker >/dev/null; then\n  sudo apt-get update\n  sudo apt-get install -y docker.io docker-compose-v2\nfi\nif ! sudo docker info >/dev/null 2>&1; then\n  sudo dockerd >/tmp/dockerd.log 2>&1 &\n  for _ in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && break; sleep 1; done\n  sudo docker info\nfi\nsudo chmod 666 /var/run/docker.sock || true\ncd /workspace/server\nif ! docker image inspect proves-yamcs:5.12.8 >/dev/null 2>&1; then\n  make docker-image\nfi\ndocker compose up -d yamcs\n.venv/bin/python -c \"from proves_yamcs.supervisor import wait_until_ready; wait_until_ready('http://127.0.0.1:8090', 'fprime-project', 180)\""
+}
