@@ -24,6 +24,9 @@ The gateway:
 - exposes a small UI/API on `:8091` and mirrors selection to the Yamcs local
   parameter `/Ground/ActiveTxStation` on every instance
 
+A full first-time walkthrough (prerequisites, Tailscale, ground stations)
+is in **[SETUP.md](../SETUP.md)**.
+
 ## First run
 
 ```sh
