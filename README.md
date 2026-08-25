@@ -40,8 +40,9 @@ cp config/gs.serial.example.toml config/gs.toml
 make run CONFIG=config/gs.toml
 ```
 
-Open Yamcs at `http://<server>:8090` (instance selector chooses the satellite)
-and the ground-station panel at `http://<server>:8091`.
+Open Yamcs at `http://<server>:8090` (instance selector chooses the satellite),
+Grafana at `http://<server>:3000`, and the ground-station panel at
+`http://<server>:8091`.
 
 ## Simulated full-stack CI / local e2e
 
@@ -50,5 +51,15 @@ and the ground-station panel at `http://<server>:8091`.
 ```
 
 Builds [fprime-yamcs-reference](https://github.com/fprime-community/fprime-yamcs-reference)
-(`v0.1.0` by default), runs F´ + UDP/TCP bridge + GS client + Yamcs gateway, and
-asserts a `CMD_NO_OP` round-trip. See [`sim/README.md`](sim/README.md).
+(`v0.1.0` by default), runs F´ + UDP/TCP bridge + GS client + Yamcs gateway +
+Grafana, and asserts a `CMD_NO_OP` round-trip. See [`sim/README.md`](sim/README.md).
+
+To leave that same stack running for interactive testing (no PROVES board):
+
+```sh
+./scripts/run_test_sim.sh
+```
+
+Then open Yamcs (`:8090`, instance selector for `proves-flight` /
+`proves-engineering`) and Grafana (`:3000`, one folder per deployment with
+Overview and Commanding layouts). Ctrl+C stops the stack.

@@ -1,0 +1,274 @@
+{
+  "uid": "__DASHBOARD_UID__",
+  "title": "__DEPLOYMENT__ Overview",
+  "description": "Live Yamcs link rates, JVM, and events for F´ deployment __DEPLOYMENT__ (SCID __SCID__).",
+  "tags": ["yamcs", "proves", "jaops", "__DEPLOYMENT__"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "liveNow": true,
+  "editable": true,
+  "graphTooltip": 1,
+  "fiscalYearStartMonth": 0,
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 100,
+      "type": "text",
+      "title": "Deployment",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "F´ deployment **__DEPLOYMENT__** · Yamcs instance `__INSTANCE__` · SCID **__SCID__** · TM UDP **:__TM_PORT__** · realtime endpoint `__ENDPOINT__`"
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "TM ingest rate",
+      "description": "Bytes per second into UDP_TM_IN (gateway → Yamcs).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 3 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/links/UDP_TM_IN/dataInRate",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "TC outbound rate",
+      "description": "Bytes per second out of UDP_TC_OUT (Yamcs → gateway).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 3 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/links/UDP_TC_OUT/dataOutRate",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "TM frames received",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/links/UDP_TM_IN/dataInCount",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Commands sent",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/cmdQueue/default/numSentCommands",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Yamcs JVM memory",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/jvm/memoryUsed",
+          "asVariable": false
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/jvm/totalMemory",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "deckbytes",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Yamcs JVM threads",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "plot",
+          "endpoint": "__ENDPOINT__",
+          "parameter": "/yamcs/proves-central/jvm/threadCount",
+          "asVariable": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single", "sort": "none" }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Events",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 27 },
+      "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "jaops-yamcs-datasource", "uid": "jaops-yamcs-main" },
+          "type": "events",
+          "endpoint": "__ENDPOINT__"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "align": "auto" } }, "overrides": [] },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } }
+    }
+  ]
+}

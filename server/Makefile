@@ -15,6 +15,7 @@ COMPOSE_RUNTIME = $(COMPOSE) -f $(ROOT)/compose.yaml -f $(ROOT)/$(RUNTIME_DIR)/c
 DEPLOYMENTS ?= config/deployments.toml
 RUNTIME_DIR ?= runtime
 YAMCS_URL ?= http://localhost:8090
+GRAFANA_URL ?= http://localhost:3000
 YAMCS_UID ?= $(shell id -u)
 YAMCS_GID ?= $(shell id -g)
 export YAMCS_UID YAMCS_GID
@@ -77,22 +78,24 @@ yamcs-dict: yamcs-config-check ## Validate the bundle and generate Yamcs configu
 yamcs-mdb: yamcs-dict ## Alias for yamcs-dict
 
 .PHONY: yamcs-server
-yamcs-server: yamcs-dict ## Start only the central Yamcs Docker server
-	$(COMPOSE_RUNTIME) up yamcs
+yamcs-server: yamcs-dict ## Start Yamcs and Grafana (no gateway / event bridge)
+	$(COMPOSE_RUNTIME) up yamcs grafana
 
 .PHONY: yamcs
-yamcs: yamcs-dict ## Start Yamcs, the event bridge, and the multi-GS gateway
+yamcs: yamcs-dict ## Start Yamcs, Grafana, the event bridge, and the multi-GS gateway
 	$(UV_RUN) proves-yamcs-supervisor run \
-	  --yamcs-url $(YAMCS_URL)
+	  --yamcs-url $(YAMCS_URL) \
+	  --grafana-url $(GRAFANA_URL)
 
 .PHONY: yamcs-stop
 yamcs-stop: venv ## Stop only this project's stack and owned processes
 	@$(UV_RUN) proves-yamcs-supervisor stop
 
 .PHONY: yamcs-build-check
-yamcs-build-check: yamcs-dict ## Boot Yamcs, verify readiness, and tear it down
+yamcs-build-check: yamcs-dict ## Boot Yamcs + Grafana, verify readiness, and tear it down
 	$(UV_RUN) proves-yamcs-supervisor check \
-	  --yamcs-url $(YAMCS_URL)
+	  --yamcs-url $(YAMCS_URL) \
+	  --grafana-url $(GRAFANA_URL)
 
 .PHONY: test
 test: venv ## Run server unit tests

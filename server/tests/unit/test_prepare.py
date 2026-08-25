@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -66,8 +67,20 @@ def test_render_configuration_substitutes_all_dynamic_values(tmp_path):
     assert "@INSTANCES@" not in global_config
     overlay = (runtime / "compose.udp.yaml").read_text(encoding="utf-8")
     assert "127.0.0.1:50000:50000/udp" in overlay
+    assert "dashboards/json/proves-flight/overview.json" in overlay
     manifest = (config / "deployments.json").read_text(encoding="utf-8")
     assert "proves-flight" in manifest
+    datasource = (runtime / "grafana/datasources/yamcs.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert '"proves-flight_realtime"' in datasource
+    overview = json.loads(
+        (runtime / "grafana/dashboards/json/proves-flight/overview.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert overview["uid"] == "yamcs-proves-flight-overview"
+    assert overview["title"] == "proves-flight Overview"
 
     secret_file = runtime / "secrets/yamcs-secret-key"
     assert secret_file.stat().st_mode & 0o777 == 0o600
@@ -91,6 +104,26 @@ def test_render_configuration_writes_two_instances(tmp_path):
     overlay = (runtime / "compose.udp.yaml").read_text(encoding="utf-8")
     assert "50000:50000/udp" in overlay
     assert "50002:50002/udp" in overlay
+    datasource = (runtime / "grafana/datasources/yamcs.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert '"sat-a_realtime"' in datasource
+    assert '"sat-b_replay"' in datasource
+    sat_a = json.loads(
+        (runtime / "grafana/dashboards/json/sat-a/overview.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    sat_b = json.loads(
+        (runtime / "grafana/dashboards/json/sat-b/commanding.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert sat_a["uid"] == "yamcs-sat-a-overview"
+    assert sat_b["uid"] == "yamcs-sat-b-commanding"
+    assert "sat-a_realtime" in json.dumps(sat_a)
+    assert "sat-b_realtime" in json.dumps(sat_b)
+    assert "sat-a_realtime" not in json.dumps(sat_b)
 
 
 def test_validate_xtce_requires_root_container(tmp_path):
@@ -146,3 +179,19 @@ def test_prepare_two_deployments(tmp_path):
     assert "spacecraftId: 67" in sat_b
     assert "/CCSDSSpacePacket" in sat_a
     assert "/CCSDSSpacePacket" in sat_b
+    grafana_a = json.loads(
+        (runtime / "grafana/dashboards/json/sat-a/overview.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    grafana_b = json.loads(
+        (runtime / "grafana/dashboards/json/sat-b/overview.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert grafana_a["title"] == "sat-a Overview"
+    assert grafana_b["title"] == "sat-b Overview"
+    assert (runtime / "grafana/dashboards/json/sat-a/commanding.json").is_file()
+    assert (runtime / "grafana/dashboards/json/sat-b/commanding.json").is_file()
+    assert (runtime / "grafana/dashboards/dashboards.yaml").is_file()
+    assert (runtime / "grafana/plugins/apps.yaml").is_file()

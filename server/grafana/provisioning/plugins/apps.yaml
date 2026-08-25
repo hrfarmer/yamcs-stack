@@ -1,0 +1,6 @@
+apiVersion: 1
+
+apps:
+  - type: jaops-yamcs-app
+    org_id: 1
+    disabled: false

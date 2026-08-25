@@ -1,4 +1,4 @@
-"""Own the central Yamcs container, event bridge, and multi-GS gateway."""
+"""Own the central Yamcs container, Grafana, event bridge, and multi-GS gateway."""
 
 from __future__ import annotations
 
@@ -77,6 +77,36 @@ def wait_until_instances_ready(
         )
 
 
+def wait_until_grafana_ready(url: str, timeout: int = 180) -> None:
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    base = url.rstrip("/")
+    while time.monotonic() < deadline:
+        try:
+            state = _http_json(f"{base}/api/health")
+            if not (isinstance(state, dict) and state.get("database") == "ok"):
+                time.sleep(1)
+                continue
+            plugin = _http_json(f"{base}/api/plugins/jaops-yamcs-app/settings")
+            if (
+                isinstance(plugin, dict)
+                and plugin.get("id") == "jaops-yamcs-app"
+                and plugin.get("enabled")
+            ):
+                print(f"Grafana is ready at {url} with jaops-yamcs-app")
+                return
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            last_error = exc
+        time.sleep(1)
+    raise TimeoutError(
+        f"Grafana did not become ready at {url} within {timeout}s: {last_error}"
+    )
+
+
+def _compose_stack(*extra: str) -> subprocess.CompletedProcess:
+    return _compose("up", "--build", "-d", "yamcs", "grafana", *extra)
+
+
 def _terminate(process: subprocess.Popen, timeout: int = 10) -> None:
     if process.poll() is not None:
         return
@@ -117,12 +147,13 @@ def _load_manifest(path: Path) -> RuntimeManifest:
 def run(args: argparse.Namespace) -> int:
     stop()
     manifest = _load_manifest(args.manifest)
-    _compose("up", "--build", "-d", "yamcs")
+    _compose_stack()
     wait_until_instances_ready(
         args.yamcs_url,
         [item.instance for item in manifest.deployments],
         args.timeout,
     )
+    wait_until_grafana_ready(args.grafana_url, args.timeout)
 
     event_command_base = [
         str(Path(sys.executable).with_name("fprime-yamcs-events")),
@@ -210,12 +241,13 @@ def check_server(args: argparse.Namespace) -> int:
     _compose("down", "--remove-orphans", check=False)
     manifest = _load_manifest(args.manifest)
     try:
-        _compose("up", "--build", "-d", "yamcs")
+        _compose_stack()
         wait_until_instances_ready(
             args.yamcs_url,
             [item.instance for item in manifest.deployments],
             args.timeout,
         )
+        wait_until_grafana_ready(args.grafana_url, args.timeout)
         server = _http_json(f"{args.yamcs_url}/api")
         if not isinstance(server, dict) or not server.get("yamcsVersion"):
             raise RuntimeError("Yamcs server metadata did not include a version")
@@ -277,7 +309,43 @@ def check_server(args: argparse.Namespace) -> int:
             for path, identity in archive_identities.items()
         ):
             raise RuntimeError("Yamcs archive data did not survive container restart")
-        print(f"Yamcs {server['yamcsVersion']} build check passed")
+        grafana = _http_json(f"{args.grafana_url.rstrip('/')}/api/health")
+        if not isinstance(grafana, dict) or grafana.get("database") != "ok":
+            raise RuntimeError("Grafana health endpoint did not report database ok")
+        plugin = _http_json(
+            f"{args.grafana_url.rstrip('/')}/api/plugins/jaops-yamcs-app/settings"
+        )
+        if not isinstance(plugin, dict) or not plugin.get("enabled", True):
+            raise RuntimeError("Grafana JAOPS Yamcs app is not enabled")
+        datasources = _http_json(f"{args.grafana_url.rstrip('/')}/api/datasources")
+        if not isinstance(datasources, list) or not any(
+            isinstance(item, dict) and item.get("uid") == "jaops-yamcs-main"
+            for item in datasources
+        ):
+            raise RuntimeError("Grafana did not provision the JAOPS Yamcs datasource")
+        search = _http_json(f"{args.grafana_url.rstrip('/')}/api/search?type=dash-db")
+        if not isinstance(search, list):
+            raise RuntimeError("Grafana dashboard search returned an invalid response")
+        by_folder: dict[str, set[str]] = {}
+        for entry in search:
+            if not isinstance(entry, dict):
+                continue
+            folder = str(entry.get("folderTitle") or "")
+            title = str(entry.get("title") or "")
+            by_folder.setdefault(folder, set()).add(title)
+        for item in manifest.deployments:
+            titles = by_folder.get(item.name, set())
+            missing = [
+                name
+                for name in (f"{item.name} Overview", f"{item.name} Commanding")
+                if name not in titles
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"Grafana folder {item.name!r} is missing dashboards: "
+                    f"{', '.join(missing)}"
+                )
+        print(f"Yamcs {server['yamcsVersion']} + Grafana build check passed")
         return 0
     finally:
         _compose("down", "--remove-orphans", check=False)
@@ -290,6 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     run_parser.add_argument("--yamcs-url", default="http://localhost:8090")
+    run_parser.add_argument("--grafana-url", default="http://localhost:3000")
     run_parser.add_argument("--timeout", type=int, default=180)
     run_parser.add_argument("--gateway-api-host", default="0.0.0.0")
     run_parser.add_argument("--gateway-api-port", type=int, default=8091)
@@ -302,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     check_parser.add_argument("--yamcs-url", default="http://localhost:8090")
+    check_parser.add_argument("--grafana-url", default="http://localhost:3000")
     check_parser.add_argument("--timeout", type=int, default=180)
     return parser
 

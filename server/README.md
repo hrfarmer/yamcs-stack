@@ -12,6 +12,7 @@ GS clients (Tailscale)          This host
   TC UDP :50001  ◄───────────── gateway ◄─UDP── Yamcs :50001 (host.docker.internal)
   HTTP heartbeat ─────────────► gateway :8091
 Yamcs UI / API                  :8090  (switch instance to pick a satellite)
+Grafana (JAOPS Yamcs plugin)    :3000
 ```
 
 Deployments are declared in [`config/deployments.toml`](config/deployments.toml).
@@ -42,9 +43,10 @@ make yamcs DEPLOYMENTS=tests/fixtures/deployments.toml
 ```
 
 Web UI: <http://localhost:8090>  
+Grafana: <http://localhost:3000> (JAOPS Yamcs plugin; one folder per deployment)  
 Ground stations: <http://localhost:8091>
 
-Stop with `make yamcs-stop`. `make yamcs-server` starts only the Yamcs container.
+Stop with `make yamcs-stop`. `make yamcs-server` starts Yamcs and Grafana.
 
 ## Selecting a transmit station
 
@@ -60,6 +62,7 @@ Pick the **satellite** with the Yamcs instance selector (one instance per
 | Port | Role |
 |------|------|
 | TCP 8090 | Yamcs HTTP / web |
+| TCP 3000 | Grafana (JAOPS Yamcs app + datasource) |
 | TCP 8091 | Gateway API + GS UI |
 | UDP 51000 | TM ingest from GS clients (Tailscale) |
 | UDP 50000, 50002, … | Yamcs TM in (loopback; one port per deployment) |
@@ -68,5 +71,5 @@ Pick the **satellite** with the Yamcs instance selector (one instance per
 ## Security
 
 Development posture: API binds all interfaces, CORS is open, no Yamcs operator
-auth/TLS. Rely on Tailscale for network access control; do not expose these
-ports on the public Internet.
+auth/TLS, and Grafana allows anonymous Admin. Rely on Tailscale for network
+access control; do not expose these ports on the public Internet.
