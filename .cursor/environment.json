@@ -1,4 +1,4 @@
 {
-  "install": "sudo apt-get update\nsudo apt-get install -y maven docker.io\nsudo service docker start || sudo systemctl start docker || true\ncd /workspace/server && make setup INPUT_DIR=tests/fixtures/proves && make prepare INPUT_DIR=tests/fixtures/proves\ncd /workspace/client && make setup",
-  "start": "cd /workspace/server && docker compose up -d yamcs && .venv/bin/python -c \"from proves_yamcs.supervisor import wait_until_ready; wait_until_ready('http://127.0.0.1:8090', 'fprime-project', 180)\""
+  "install": "set -eux\nsudo apt-get update\nsudo apt-get install -y maven docker.io docker-compose-v2\nif ! docker info >/dev/null 2>&1; then\n  sudo dockerd >/tmp/dockerd.log 2>&1 &\n  for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done\n  docker info\nfi\ncd /workspace/server\nmake setup INPUT_DIR=tests/fixtures/proves\nmake prepare INPUT_DIR=tests/fixtures/proves\ncd /workspace/client\nmake setup",
+  "start": "set -eux\nif ! docker info >/dev/null 2>&1; then\n  sudo dockerd >/tmp/dockerd.log 2>&1 &\n  for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done\nfi\ncd /workspace/server\ndocker compose up -d yamcs\n.venv/bin/python -c \"from proves_yamcs.supervisor import wait_until_ready; wait_until_ready('http://127.0.0.1:8090', 'fprime-project', 180)\""
 }

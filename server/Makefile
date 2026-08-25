@@ -6,7 +6,10 @@ TOOLS_DIR ?= $(ROOT)/.tools
 UV_DIR ?= $(TOOLS_DIR)/uv-$(UV_VERSION)
 UV ?= $(UV_DIR)/uv
 UV_RUN := $(UV) run --project $(ROOT)
-COMPOSE ?= $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+COMPOSE ?= $(shell \
+	if docker compose version >/dev/null 2>&1; then echo "docker compose"; \
+	elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; \
+	else echo "docker compose"; fi)
 
 INPUT_DIR ?= inputs/proves
 RUNTIME_DIR ?= runtime
@@ -39,12 +42,22 @@ patch-events: venv
 	  test -n "$$EVENT_PROCESSOR" || { echo "fprime-yamcs event processor was not installed" >&2; exit 1; }; \
 	  $(ROOT)/.venv/bin/python $(ROOT)/tools/apply_events_cpu_fix.py "$$EVENT_PROCESSOR"
 
+.PHONY: ensure-docker
+ensure-docker: ## Require a working Docker engine and Compose
+	@command -v docker >/dev/null || { echo "docker is not installed" >&2; exit 1; }
+	@docker info >/dev/null 2>&1 || { echo "docker daemon is not running" >&2; exit 1; }
+	@$(COMPOSE) version >/dev/null 2>&1 || { \
+	  echo "Docker Compose is unavailable (tried: $(COMPOSE))" >&2; exit 1; }
+
 .PHONY: docker-image
-docker-image: ## Build the pinned Yamcs Docker image
+docker-image: ensure-docker ## Build the pinned Yamcs Docker image
 	$(COMPOSE) build yamcs
 
+.PHONY: setup-python
+setup-python: patch-events ## Install Python deps and patch fprime-yamcs-events
+
 .PHONY: setup
-setup: patch-events docker-image ## Install Python dependencies and build Yamcs
+setup: setup-python docker-image ## Install Python dependencies and build Yamcs
 
 .PHONY: prepare
 prepare: patch-events ## Render configuration and generate the XTCE MDB
