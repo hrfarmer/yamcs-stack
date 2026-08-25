@@ -75,14 +75,6 @@ jobs:
           chmod +x scripts/run_e2e_sim.sh
           scripts/run_e2e_sim.sh
 
-      - name: Capture Yamcs container diagnostics
-        if: failure()
-        working-directory: server
-        run: |
-          mkdir -p ../.e2e/logs
-          docker compose ps > ../.e2e/logs/compose-ps.txt 2>&1 || true
-          docker compose logs --no-color > ../.e2e/logs/compose.log 2>&1 || true
-
       - name: Upload e2e logs
         if: always()
         uses: actions/upload-artifact@v4
