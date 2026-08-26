@@ -30,6 +30,14 @@ from proves_gs.config import (
     apply_overrides,
     load_config,
 )
+from proves_gs.radio import (
+    RADIO_CIRCUITPYTHON,
+    RADIO_NONE,
+    RadioController,
+    RadioError,
+    load_grc_opcodes,
+    normalize_radio_type,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -314,18 +322,20 @@ def _heartbeat_loop(
     stats: dict[str, int],
     interval: float,
     stop: threading.Event,
+    radio: RadioController | None = None,
 ) -> None:
     endpoint = f"{api_url.rstrip('/')}/api/stations/{station_name}/heartbeat"
     print(f"[register] heartbeating to {endpoint} every {interval:.0f}s")
     while True:
-        payload = json.dumps(
-            {
-                "tc_host": tc_host,
-                "tc_port": tc_port,
-                "tm_frames": stats["tm_frames"],
-                "tc_frames": stats["tc_frames"],
-            }
-        ).encode("utf-8")
+        payload_body: dict = {
+            "tc_host": tc_host,
+            "tc_port": tc_port,
+            "tm_frames": stats["tm_frames"],
+            "tc_frames": stats["tc_frames"],
+        }
+        if radio is not None and radio.radio_type != RADIO_NONE:
+            payload_body["radio"] = radio.status()
+        payload = json.dumps(payload_body).encode("utf-8")
         request = urllib.request.Request(
             endpoint,
             data=payload,
@@ -334,11 +344,49 @@ def _heartbeat_loop(
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
-                response.read()
-        except (OSError, urllib.error.URLError) as exc:
+                body = json.loads(response.read().decode("utf-8"))
+            _apply_desired_radio(radio, body)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             print(f"[register] heartbeat failed: {exc}")
         if stop.wait(interval):
             return
+
+
+def _apply_desired_radio(radio: RadioController | None, body: dict) -> None:
+    if radio is None or radio.radio_type == RADIO_NONE:
+        return
+    radio_body = body.get("radio") if isinstance(body, dict) else None
+    if not isinstance(radio_body, dict):
+        return
+    desired = radio_body.get("desired")
+    if not isinstance(desired, dict) or not desired:
+        return
+    if desired == (radio.applied or {}):
+        return
+    try:
+        applied = radio.apply(desired)
+    except RadioError as exc:
+        print(f"[radio] failed to apply settings: {exc}")
+        return
+    print(f"[radio] applied {radio.radio_type} settings: {applied}")
+
+
+def _drain_control_port(control_port, stop: threading.Event) -> None:
+    """Keep the control UART from filling up with console / F´ downlink."""
+    while not stop.is_set():
+        try:
+            waiting = getattr(control_port, "in_waiting", 0) or 0
+            chunk = control_port.read(max(1, waiting))
+        except OSError as exc:
+            print(f"[radio] control port read failed: {exc}")
+            return
+        if chunk:
+            text = chunk.decode("utf-8", errors="replace").strip()
+            if text:
+                for line in text.splitlines():
+                    print(f"[radio-console] {line}")
+        else:
+            stop.wait(0.1)
 
 
 def _detect_tc_host(explicit: str | None, server_host: str) -> str:
@@ -363,8 +411,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="TOML config file (see config/*.example.toml)",
     )
     parser.add_argument("--mode", choices=["serial", "tcp"])
-    parser.add_argument("--uart-device")
+    parser.add_argument("--uart-device", help="data UART (alias: --uart-data-device)")
+    parser.add_argument("--uart-data-device", dest="uart_device")
+    parser.add_argument("--uart-control-device")
     parser.add_argument("--uart-baud", type=int)
+    parser.add_argument(
+        "--radio-type",
+        choices=[
+            "none",
+            "circuitpython",
+            "grc",
+            "circuit-python-passthrough",
+            "ground-radio-controller",
+        ],
+    )
+    parser.add_argument("--radio-scid", type=int)
     parser.add_argument("--tcp-host")
     parser.add_argument("--tcp-port", type=int)
     parser.add_argument("--server-host")
@@ -392,7 +453,10 @@ def parse_config(argv: list[str] | None = None) -> ClientConfig:
             {
                 "mode": args.mode,
                 "uart_device": args.uart_device,
+                "uart_control_device": args.uart_control_device,
                 "uart_baud": args.uart_baud,
+                "radio_type": args.radio_type,
+                "radio_scid": args.radio_scid,
                 "tcp_host": args.tcp_host,
                 "tcp_port": args.tcp_port,
                 "server_host": args.server_host,
@@ -428,14 +492,34 @@ def main(argv: list[str] | None = None) -> int:
     advertise_host = _detect_tc_host(config.tc_advertise_host, config.server_host)
     api_url = config.gateway_api_url or f"http://{config.server_host}:8091"
     stop = threading.Event()
+    radio_type = normalize_radio_type(config.radio_type)
+    radio: RadioController | None = None
+    control_port = None
 
     if config.mode == "serial":
         import serial
 
-        print(f"[serial] opening {config.uart_device} at {config.uart_baud} baud")
+        print(f"[serial] data {config.uart_device} at {config.uart_baud} baud")
         transport = serial.Serial(config.uart_device, config.uart_baud, timeout=0.1)
         with contextlib.suppress(AttributeError, OSError):
             transport.set_buffer_size(rx_size=65536)
+        if radio_type != RADIO_NONE:
+            print(
+                f"[serial] control {config.uart_control_device} "
+                f"({radio_type}) at {config.uart_baud} baud"
+            )
+            control_port = serial.Serial(
+                config.uart_control_device, config.uart_baud, timeout=0.1
+            )
+            radio = RadioController(
+                radio_type=radio_type,
+                control_port=control_port,
+                scid=config.radio_scid,
+                vcid=config.vc_id,
+                opcodes=load_grc_opcodes(config.radio_dictionary)
+                if radio_type != RADIO_CIRCUITPYTHON
+                else None,
+            )
         tm_target = _forward_tm_serial
         tm_args = (
             transport,
@@ -486,12 +570,19 @@ def main(argv: list[str] | None = None) -> int:
             stats,
             config.heartbeat_interval,
             stop,
+            radio,
         ),
         daemon=True,
     )
     tm_thread.start()
     tc_thread.start()
     heartbeat_thread.start()
+    if control_port is not None:
+        threading.Thread(
+            target=_drain_control_port,
+            args=(control_port, stop),
+            daemon=True,
+        ).start()
     try:
         tm_thread.join()
         tc_thread.join()
@@ -502,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
         tc_socket.close()
         tm_socket.close()
         transport.close()
+        if control_port is not None:
+            control_port.close()
     return 0
 
 

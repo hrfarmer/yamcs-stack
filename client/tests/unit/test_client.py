@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -16,6 +17,17 @@ from proves_gs.client import (
     select_satellite_for_tc,
 )
 from proves_gs.config import ConfigError, apply_overrides, load_config
+from proves_gs.radio import (
+    GRC_DEFAULT_OPCODES,
+    RADIO_CIRCUITPYTHON,
+    RadioController,
+    RadioError,
+    encode_circuitpython_settings,
+    encode_fprime_ccsds_command,
+    encode_grc_settings,
+    load_grc_opcodes,
+    validate_radio_settings,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "proves"
 
@@ -168,6 +180,112 @@ def test_load_config_rejects_unknown_keys(tmp_path):
     )
     with pytest.raises(ConfigError, match="unknown config keys"):
         load_config(config_path)
+
+
+def test_load_config_accepts_dual_uart_and_radio_type(tmp_path):
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    config_path = tmp_path / "gs.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'mode = "serial"',
+                'station_name = "gs-lab"',
+                'uart_data_device = "/dev/ttyACM1"',
+                'uart_control_device = "/dev/ttyACM0"',
+                'radio_type = "circuit-python-passthrough"',
+                "[[satellite]]",
+                'name = "proves-flight"',
+                'input_dir = "inputs"',
+                "skip_auth = true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    assert config.uart_device == "/dev/ttyACM1"
+    assert config.uart_control_device == "/dev/ttyACM0"
+    assert config.radio_type == "circuit-python-passthrough"
+
+
+def test_load_config_requires_control_port_for_radio(tmp_path):
+    config_path = tmp_path / "gs.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'mode = "serial"',
+                'station_name = "gs-lab"',
+                'uart_device = "/dev/ttyACM0"',
+                'radio_type = "grc"',
+                "[[satellite]]",
+                'name = "a"',
+                'input_dir = "."',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="uart_control_device"):
+        load_config(config_path)
+
+
+def test_circuitpython_settings_are_console_tokens():
+    assert encode_circuitpython_settings({"mode": "2"}) == b"2\n"
+    with pytest.raises(RadioError, match="mode"):
+        validate_radio_settings(RADIO_CIRCUITPYTHON, {"mode": "9"})
+
+
+def test_grc_frames_include_set_freq_opcode_and_hz():
+    frequency = 437_425_000
+    frames = encode_grc_settings(
+        {"frequency_hz": frequency},
+        scid=0x44,
+        vcid=1,
+    )
+    assert len(frames) == 5
+    payload = frames[0][5:-2]
+    opcode = GRC_DEFAULT_OPCODES["SET_FREQ"].to_bytes(4, "big")
+    assert opcode in payload
+    assert frequency.to_bytes(4, "big") in payload
+
+
+def test_grc_opcode_lookup_from_dictionary(tmp_path):
+    dictionary = tmp_path / "dict.json"
+    dictionary.write_text(
+        json.dumps(
+            {
+                "commands": [
+                    {
+                        "name": "ReferenceDeployment.uhf.SET_FREQ",
+                        "opcode": 42,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_grc_opcodes(dictionary)["SET_FREQ"] == 42
+
+
+def test_radio_controller_writes_circuitpython_mode():
+    port = MagicMock()
+    radio = RadioController(RADIO_CIRCUITPYTHON, port)
+    applied = radio.apply({"mode": "U"})
+    port.write.assert_called_once_with(b"U\n")
+    assert applied == {"mode": "U"}
+    assert radio.status()["type"] == RADIO_CIRCUITPYTHON
+
+
+def test_encode_fprime_ccsds_command_is_crc_valid_tc():
+    frame = encode_fprime_ccsds_command(
+        0x10017009,
+        (437_400_000).to_bytes(4, "big"),
+        scid=0x44,
+        vcid=1,
+    )
+    assert crc16_ccitt(frame[:-2]) == int.from_bytes(frame[-2:], "big")
 
 
 def test_authentication_known_vector_and_persistent_sequence(tmp_path):

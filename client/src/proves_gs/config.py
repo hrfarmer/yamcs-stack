@@ -9,6 +9,8 @@ from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
+from proves_gs.radio import RADIO_NONE, RadioError, normalize_radio_type
+
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -43,7 +45,11 @@ class ClientConfig:
 
     mode: str = "serial"
     uart_device: str = "/dev/ttyUSB0"
+    uart_control_device: str = ""
     uart_baud: int = 115200
+    radio_type: str = "none"
+    radio_scid: int = 0x44
+    radio_dictionary: Path | None = None
     tcp_host: str = "127.0.0.1"
     tcp_port: int = 5000
     server_host: str = "127.0.0.1"
@@ -62,6 +68,8 @@ class ClientConfig:
             raise ConfigError(f"mode must be 'serial' or 'tcp', got {self.mode!r}")
         if not 0 <= self.vc_id <= 7:
             raise ConfigError("vc_id must be in the range 0..7")
+        if not 0 <= self.radio_scid <= 0x3FF:
+            raise ConfigError("radio_scid must fit the CCSDS 10-bit field")
         if self.uart_baud < 1:
             raise ConfigError("uart_baud must be positive")
         if self.heartbeat_interval < 1:
@@ -74,6 +82,21 @@ class ClientConfig:
             raise ConfigError("uart_device is required for serial mode")
         if self.mode == "tcp" and not self.tcp_host.strip():
             raise ConfigError("tcp_host is required for tcp mode")
+        try:
+            radio_type = normalize_radio_type(self.radio_type)
+        except RadioError as exc:
+            raise ConfigError(str(exc)) from exc
+        if radio_type != RADIO_NONE:
+            if self.mode != "serial":
+                raise ConfigError("radio_type requires serial mode")
+            if not self.uart_control_device.strip():
+                raise ConfigError(
+                    "uart_control_device is required when radio_type is set"
+                )
+            if self.uart_control_device.strip() == self.uart_device.strip():
+                raise ConfigError(
+                    "uart_control_device must be different from uart_device"
+                )
         if not self.satellites:
             raise ConfigError("at least one [[satellite]] table is required")
         names = [item.name for item in self.satellites]
@@ -166,6 +189,10 @@ def load_config(path: Path) -> ClientConfig:
 
     base_dir = config_path.parent
     satellites_raw = raw.pop("satellite", None)
+    if "uart_data_device" in raw:
+        if "uart_device" in raw:
+            raise ConfigError("use uart_device or uart_data_device, not both")
+        raw["uart_device"] = raw.pop("uart_data_device")
     known = {item.name for item in fields(ClientConfig)}
     unknown = sorted(set(raw) - known)
     if unknown:
@@ -179,10 +206,13 @@ def load_config(path: Path) -> ClientConfig:
             "server_tm_port",
             "tc_listen_port",
             "vc_id",
+            "radio_scid",
         }:
             values[key] = _as_int(value, key)
         elif key == "heartbeat_interval":
             values[key] = _as_float(value, key)
+        elif key == "radio_dictionary":
+            values[key] = _resolve_path(value, base_dir, required=True)
         elif key in {"tc_advertise_host", "gateway_api_url"}:
             if value is None:
                 values[key] = None
