@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +62,10 @@ GRC_BANDWIDTH_ENUM = {125: 0, 250: 1, 500: 2}
 GRC_CODING_RATE_ENUM = {5: 1, 6: 2, 7: 3, 8: 4}
 
 FW_PACKET_COMMAND = 0
-COMMAND_START_TOKEN = 0x5A5A5A5A
+SPACE_PACKET_HEADER_SIZE = 6
+SPACE_PACKET_TYPE_TC = 1
+SPACE_PACKET_UNSEGMENTED = 0b11
+_space_packet_sequence = itertools.count()
 
 
 class RadioError(ValueError):
@@ -206,22 +210,49 @@ def validate_radio_settings(
     }
 
 
+def encode_ccsds_space_packet(
+    user_data: bytes,
+    *,
+    apid: int,
+    sequence_count: int,
+) -> bytes:
+    """Build a CCSDS space packet (TC, unsegmented) around user_data."""
+    if not user_data:
+        raise RadioError("space packet user data must not be empty")
+    identification = (
+        (0 << 13) | (SPACE_PACKET_TYPE_TC << 12) | (0 << 11) | (apid & 0x7FF)
+    )
+    sequence = ((SPACE_PACKET_UNSEGMENTED & 0x3) << 14) | (sequence_count & 0x3FFF)
+    length = len(user_data) - 1
+    return (
+        identification.to_bytes(2, "big")
+        + sequence.to_bytes(2, "big")
+        + length.to_bytes(2, "big")
+        + user_data
+    )
+
+
 def encode_fprime_ccsds_command(
     opcode: int,
     args: bytes,
     *,
     scid: int,
     vcid: int,
+    sequence_count: int | None = None,
 ) -> bytes:
-    """Frame an F´ command the way fprime-gds uplinks over CCSDS UART."""
+    """Frame an F´ command as a CCSDS space packet inside a TC transfer frame.
+
+    GRC ComCcsds uplink is TC frame -> SpacePacketDeframer -> FprimeRouter ->
+    CmdDispatcher, which deserializes Fw::CmdPacket as descriptor + opcode + args.
+    """
     descriptor = FW_PACKET_COMMAND.to_bytes(2, "big")
-    op_code = opcode.to_bytes(4, "big")
-    length = (len(descriptor) + len(op_code) + len(args)).to_bytes(4, "big")
-    packet = (
-        COMMAND_START_TOKEN.to_bytes(4, "big") + length + descriptor + op_code + args
+    command = descriptor + opcode.to_bytes(4, "big") + args
+    seq = sequence_count if sequence_count is not None else next(_space_packet_sequence)
+    space_packet = encode_ccsds_space_packet(
+        command, apid=FW_PACKET_COMMAND, sequence_count=seq
     )
     return SpaceDataLinkFramerDeframer(scid=scid, vcid=vcid, frame_size=None).frame(
-        packet
+        space_packet
     )
 
 
@@ -266,16 +297,14 @@ def encode_grc_settings(
     vcid: int,
     opcodes: dict[str, int] | None = None,
 ) -> list[bytes]:
-    """Return one CCSDS TC frame per GRC setting that should be applied."""
+    """Return one CCSDS TC frame per GRC setting that should be applied.
+
+    Parameter SET commands only store values. SET_FREQ is sent last because
+    its handler calls enableRx() and programs the radio with the stored params.
+    """
     normalized = validate_radio_settings(RADIO_GRC, settings)
     table = opcodes or GRC_DEFAULT_OPCODES
-    frames = [
-        encode_fprime_ccsds_command(
-            table["SET_FREQ"],
-            normalized["frequency_hz"].to_bytes(4, "big"),
-            scid=scid,
-            vcid=vcid,
-        ),
+    return [
         encode_fprime_ccsds_command(
             table["DATA_RATE_PRM_SET"],
             bytes([normalized["spreading_factor"]]),
@@ -300,8 +329,13 @@ def encode_grc_settings(
             scid=scid,
             vcid=vcid,
         ),
+        encode_fprime_ccsds_command(
+            table["SET_FREQ"],
+            normalized["frequency_hz"].to_bytes(4, "big"),
+            scid=scid,
+            vcid=vcid,
+        ),
     ]
-    return frames
 
 
 @dataclass
