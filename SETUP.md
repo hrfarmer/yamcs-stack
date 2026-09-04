@@ -95,7 +95,9 @@ Edit `config/gs.toml`:
 ```toml
 server_host = "yamcs-server"   # Tailscale name or 100.x IPv4
 station_name = "gs-lab"        # unique per station
-uart_device = "/dev/ttyUSB0"   # serial mode; TCP mode uses tcp_host / tcp_port
+uart_device = "/dev/ttyACM1"   # data port (TM/TC)
+uart_control_device = "/dev/ttyACM0"  # board control / console
+radio_type = "circuitpython"   # or "grc" for ground-radio-controller
 
 [[satellite]]
 name = "proves-flight"
@@ -121,7 +123,9 @@ radios.
 
 1. Open `http://<server>:8091` — the station should be **online**.
 2. Select it as TX and click **Apply** (or set `/Ground/ActiveTxStation` in
-   Yamcs).
+   Yamcs). If the client advertised a radio (`circuitpython` or `grc`), the
+   gateway page also shows that board’s settings. Apply those and the station
+   writes them to the radio control port on the next heartbeat.
 3. Open Yamcs at `:8090` and pick the instance. TM should move once the
    radio is producing frames. `CMD_NO_OP` is a safe command check.
    Grafana at `:3000` has Overview / Commanding per deployment.

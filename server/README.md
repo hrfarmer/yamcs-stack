@@ -23,6 +23,8 @@ The gateway:
 - forwards TC from every instance to the **active TX station**
 - exposes a small UI/API on `:8091` and mirrors selection to the Yamcs local
   parameter `/Ground/ActiveTxStation` on every instance
+- if a station advertises a radio (`circuitpython` or `grc`), the UI can set
+  that board's control-port settings (LoRa mode vs `SET_FREQ` / modulation)
 
 See **[SETUP.md](../SETUP.md)** to bring the server up.
 

@@ -13,6 +13,19 @@ bent-pipe) and passes CCSDS frames to the central Yamcs gateway over Tailscale.
 - Wrap telecommands with the matching satellite's PROVES HMAC auth +
   space-data-link framing before the radio
 
+PROVES radio boards expose **two USB serial ports**. Point `uart_device` at
+the **data** port (TM/TC bytes) and `uart_control_device` at the **control**
+port, then set `radio_type`:
+
+- `circuitpython` — [circuit-python-passthrough](https://github.com/Open-Source-Space-Foundation/proves-core-reference/tree/main/circuit-python-passthrough):
+  console is first, data is second. Gateway UI picks LoRa mode `1`/`2`/`3`/`4`/`U`.
+- `grc` — [ground-radio-controller](https://github.com/Open-Source-Space-Foundation/ground-radio-controller):
+  `-if00` is control, `-if02` is data. Gateway UI sets `SET_FREQ` plus spreading
+  factor / bandwidth / coding rate.
+
+The gateway queues those settings on the next client heartbeat; the client
+writes them to the control port.
+
 Each `[[satellite]]` table points at a firmware bundle (`fprime-dictionary.json`
 plus `auth-key.hex`). The client selects HMAC key and SCID from the incoming
 Yamcs TC transfer frame.

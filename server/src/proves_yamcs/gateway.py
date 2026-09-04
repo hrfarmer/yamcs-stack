@@ -22,6 +22,13 @@ from proves_yamcs.deployments import (
     RuntimeManifest,
     load_runtime_manifest,
 )
+from proves_yamcs.radio import (
+    RADIO_NONE,
+    RadioError,
+    normalize_radio_type,
+    radio_schema,
+    validate_radio_settings,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -46,9 +53,30 @@ class Station:
     tm_frames: int = 0
     tc_frames: int = 0
     source_addrs: set[str] = field(default_factory=set)
+    radio_type: str = RADIO_NONE
+    radio_applied: dict[str, Any] = field(default_factory=dict)
+    radio_desired: dict[str, Any] | None = None
+    radio_error: str | None = None
+
+    def radio_dict(self) -> dict[str, Any] | None:
+        if self.radio_type == RADIO_NONE:
+            return None
+        payload: dict[str, Any] = {
+            "type": self.radio_type,
+            "applied": dict(self.radio_applied),
+            "desired": dict(self.radio_desired)
+            if self.radio_desired is not None
+            else dict(self.radio_applied),
+            "schema": radio_schema(self.radio_type),
+            "pending": self.radio_desired is not None
+            and self.radio_desired != self.radio_applied,
+        }
+        if self.radio_error:
+            payload["error"] = self.radio_error
+        return payload
 
     def as_dict(self, *, active: bool, online: bool) -> dict[str, Any]:
-        return {
+        payload = {
             "name": self.name,
             "tc_host": self.tc_host,
             "tc_port": self.tc_port,
@@ -58,6 +86,10 @@ class Station:
             "active_tx": active,
             "online": online,
         }
+        radio = self.radio_dict()
+        if radio is not None:
+            payload["radio"] = radio
+        return payload
 
 
 @dataclass
@@ -148,6 +180,7 @@ class Gateway:
         tc_port: int,
         tm_frames: int = 0,
         tc_frames: int = 0,
+        radio: dict[str, Any] | None = None,
     ) -> Station:
         if not name or "/" in name or name != name.strip():
             raise ValueError("invalid station name")
@@ -170,6 +203,60 @@ class Gateway:
                 station.last_seen = now
             station.tm_frames = tm_frames
             station.tc_frames = tc_frames
+            self._update_radio_unlocked(station, radio)
+            return station
+
+    def _update_radio_unlocked(
+        self, station: Station, radio: dict[str, Any] | None
+    ) -> None:
+        if not radio:
+            return
+        if not isinstance(radio, dict):
+            raise ValueError("radio must be an object")
+        radio_type = normalize_radio_type(radio.get("type"))
+        if radio_type == RADIO_NONE:
+            return
+        applied_raw = radio.get("applied") or {}
+        if not isinstance(applied_raw, dict):
+            raise ValueError("radio.applied must be an object")
+        applied = (
+            validate_radio_settings(radio_type, applied_raw) if applied_raw else {}
+        )
+        if station.radio_type == RADIO_NONE:
+            station.radio_type = radio_type
+            print(f"[gateway] station {station.name} radio type -> {radio_type}")
+        elif station.radio_type != radio_type:
+            raise ValueError(
+                f"station {station.name} radio type is {station.radio_type}, "
+                f"cannot change to {radio_type}"
+            )
+        station.radio_applied = applied
+        station.radio_error = str(radio.get("error")) if radio.get("error") else None
+        if station.radio_desired == applied:
+            station.radio_desired = None
+
+    def get_station(self, name: str) -> Station:
+        with self._lock:
+            station = self._stations.get(name)
+            if station is None:
+                raise KeyError(name)
+            return station
+
+    def set_radio_settings(self, name: str, settings: dict[str, Any]) -> Station:
+        with self._lock:
+            station = self._stations.get(name)
+            if station is None:
+                raise KeyError(name)
+            if station.radio_type == RADIO_NONE:
+                raise RadioError("station has not advertised a radio control port")
+            station.radio_desired = validate_radio_settings(
+                station.radio_type, settings
+            )
+            station.radio_error = None
+            print(
+                f"[gateway] radio desired for {name} ({station.radio_type}): "
+                f"{station.radio_desired}"
+            )
             return station
 
     def list_stations(self) -> list[dict[str, Any]]:
@@ -339,26 +426,52 @@ INDEX_HTML = """<!DOCTYPE html>
       padding: 0.6rem 0.8rem;
       border-bottom: 1px solid #d9d2c4;
     }
-    button, select { font: inherit; padding: 0.35rem 0.7rem; }
+    button, select, input { font: inherit; padding: 0.35rem 0.7rem; }
+    label { display: block; margin: 0.4rem 0 0.15rem; }
     .ok { color: #0b6e4f; } .stale { color: #8a4b08; }
+    .pending { color: #8a4b08; }
     .meta { margin: 1rem 0; color: #5c564c; }
+    .panel {
+      width: min(720px, 100%);
+      background: #fffdf8;
+      border: 1px solid #d9d2c4;
+      padding: 1rem 1.1rem;
+      margin: 0 0 1.5rem;
+    }
+    .row { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; }
+    .error { color: #9b1c1c; }
   </style>
 </head>
 <body>
   <h1>Ground Stations</h1>
   <p class="meta">Select the TX station used for Yamcs telecommands.
   Telemetry from all online stations is routed by spacecraft ID into the
-  matching Yamcs instance.</p>
+  matching Yamcs instance. Stations with a radio control port can change
+  CircuitPython passthrough mode or Ground Radio Controller frequency from
+  this page.</p>
   <p>Active TX:
     <select id="active"></select>
     <button id="apply" type="button">Apply</button>
   </p>
   <table>
     <thead>
-      <tr><th>Name</th><th>TC endpoint</th><th>Status</th><th>TX</th></tr>
+      <tr>
+        <th>Name</th><th>TC endpoint</th><th>Radio</th>
+        <th>Status</th><th>TX</th>
+      </tr>
     </thead>
     <tbody id="rows"></tbody>
   </table>
+  <div class="panel" id="radio-panel" hidden>
+    <h2 id="radio-title">Radio settings</h2>
+    <p class="meta" id="radio-meta"></p>
+    <form id="radio-form"></form>
+    <p class="row">
+      <button id="radio-apply" type="button">Apply radio settings</button>
+      <span class="meta" id="radio-status"></span>
+    </p>
+    <p class="error" id="radio-error"></p>
+  </div>
   <h1>Deployments</h1>
   <table>
     <thead>
@@ -371,23 +484,100 @@ INDEX_HTML = """<!DOCTYPE html>
   </table>
   <p class="meta" id="stats"></p>
   <script>
+    const RADIO_LABELS = {
+      circuitpython: 'CircuitPython passthrough',
+      grc: 'Ground Radio Controller',
+    };
+    let lastStations = [];
+    let selectedRadio = '';
+
+    function radioLabel(type) {
+      return RADIO_LABELS[type] || type || 'none';
+    }
+
+    function fieldValue(field, values) {
+      const raw = values[field.name];
+      return raw === undefined || raw === null ? field.default : raw;
+    }
+
+    function renderRadioForm(station) {
+      const form = document.getElementById('radio-form');
+      const radio = station.radio;
+      const values = radio.desired || radio.applied || {};
+      form.innerHTML = (radio.schema && radio.schema.fields || []).map(field => {
+        const current = fieldValue(field, values);
+        if (field.kind === 'enum') {
+          const options = field.options.map(opt => {
+            const selected = String(opt.value) === String(current) ? 'selected' : '';
+            return `<option value="${opt.value}" ${selected}>${opt.label}</option>`;
+          }).join('');
+          return `<label>${field.label}
+            <select name="${field.name}">${options}</select></label>`;
+        }
+        return `<label>${field.label}
+          <input name="${field.name}" type="number"
+            min="${field.minimum || ''}" max="${field.maximum || ''}"
+            value="${current}"></label>`;
+      }).join('');
+      document.getElementById('radio-title').textContent =
+        `Radio settings — ${station.name}`;
+      document.getElementById('radio-meta').textContent =
+        radioLabel(radio.type) +
+        (radio.pending ? ' (waiting for the station to apply)' : '');
+      document.getElementById('radio-error').textContent = radio.error || '';
+      document.getElementById('radio-panel').hidden = false;
+    }
+
+    function readFormSettings(form) {
+      const settings = {};
+      for (const element of form.elements) {
+        if (!element.name) continue;
+        if (element.type === 'number') settings[element.name] = Number(element.value);
+        else settings[element.name] = element.value;
+      }
+      return settings;
+    }
+
     async function refresh() {
       const status = await (await fetch('/api/status')).json();
+      lastStations = status.stations || [];
       const select = document.getElementById('active');
       const current = status.active_tx || '';
-      select.innerHTML = status.stations.map(s => {
+      select.innerHTML = lastStations.map(s => {
         const selected = s.name === current ? 'selected' : '';
         return `<option value="${s.name}" ${selected}>${s.name}</option>`;
       }).join('');
-      document.getElementById('rows').innerHTML = status.stations.map(s => `
-        <tr>
+      if (!selectedRadio) {
+        const withRadio = lastStations.find(s => s.radio && s.radio.type);
+        selectedRadio = withRadio ? withRadio.name : '';
+      }
+      document.getElementById('rows').innerHTML = lastStations.map(s => {
+        const radio = s.radio ? radioLabel(s.radio.type) : '—';
+        const pending = s.radio && s.radio.pending ? ' pending' : '';
+        const chosen = s.name === selectedRadio ? ' style="font-weight:600"' : '';
+        return `<tr data-station="${s.name}"${chosen}>
           <td>${s.name}</td>
           <td>${s.tc_host}:${s.tc_port}</td>
+          <td class="${pending ? 'pending' : ''}">${radio}${pending}</td>
           <td class="${s.online ? 'ok' : 'stale'}">
             ${s.online ? 'online' : 'stale'}
           </td>
           <td>${s.active_tx ? 'yes' : ''}</td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
+      const station = lastStations.find(s => s.name === selectedRadio && s.radio);
+      if (station) {
+        const form = document.getElementById('radio-form');
+        const editing = form.contains(document.activeElement);
+        if (!form.innerHTML || !editing) renderRadioForm(station);
+        else {
+          document.getElementById('radio-meta').textContent =
+            radioLabel(station.radio.type) +
+            (station.radio.pending ? ' (waiting for the station to apply)' : '');
+          document.getElementById('radio-error').textContent =
+            station.radio.error || '';
+        }
+      } else document.getElementById('radio-panel').hidden = true;
       document.getElementById('deployments').innerHTML =
         (status.deployments || []).map(d => `
         <tr>
@@ -409,6 +599,37 @@ INDEX_HTML = """<!DOCTYPE html>
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({name}),
       });
+      await refresh();
+    };
+    document.getElementById('rows').onclick = (event) => {
+      const row = event.target.closest('tr[data-station]');
+      if (!row) return;
+      selectedRadio = row.getAttribute('data-station');
+      const station = lastStations.find(s => s.name === selectedRadio);
+      if (station && station.radio) renderRadioForm(station);
+    };
+    document.getElementById('radio-apply').onclick = async () => {
+      if (!selectedRadio) return;
+      const settings = readFormSettings(document.getElementById('radio-form'));
+      const status = document.getElementById('radio-status');
+      const error = document.getElementById('radio-error');
+      status.textContent = 'saving…';
+      error.textContent = '';
+      const response = await fetch(
+        '/api/stations/' + encodeURIComponent(selectedRadio) + '/radio',
+        {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({settings}),
+        }
+      );
+      const body = await response.json();
+      if (!response.ok) {
+        status.textContent = '';
+        error.textContent = body.error || 'request failed';
+        return;
+      }
+      status.textContent = 'queued for the station';
       await refresh();
     };
     refresh();
@@ -460,6 +681,25 @@ def make_handler(gateway: Gateway):
             if path == "/api/active-tx":
                 self._send_json(200, {"name": gateway.get_active_tx()})
                 return
+            parts = path.strip("/").split("/")
+            if (
+                len(parts) == 4
+                and parts[0] == "api"
+                and parts[1] == "stations"
+                and parts[3] == "radio"
+            ):
+                name = unquote(parts[2])
+                try:
+                    station = gateway.get_station(name)
+                except KeyError:
+                    self._send_json(404, {"error": "unknown station"})
+                    return
+                radio = station.radio_dict()
+                if radio is None:
+                    self._send_json(404, {"error": "station has no radio"})
+                    return
+                self._send_json(200, radio)
+                return
             self._send_json(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -482,6 +722,7 @@ def make_handler(gateway: Gateway):
                         int(body["tc_port"]),
                         int(body.get("tm_frames", 0)),
                         int(body.get("tc_frames", 0)),
+                        body.get("radio"),
                     )
                 except (
                     KeyError,
@@ -504,15 +745,38 @@ def make_handler(gateway: Gateway):
 
         def do_PUT(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            if path != "/api/active-tx":
-                self._send_json(404, {"error": "not found"})
-                return
+            parts = path.strip("/").split("/")
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length) if length else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            if (
+                len(parts) == 4
+                and parts[0] == "api"
+                and parts[1] == "stations"
+                and parts[3] == "radio"
+            ):
+                name = unquote(parts[2])
+                settings = body.get("settings", body)
+                try:
+                    station = gateway.set_radio_settings(name, settings)
+                except KeyError:
+                    self._send_json(404, {"error": "unknown station"})
+                    return
+                except (RadioError, ValueError, TypeError) as exc:
+                    self._send_json(400, {"error": str(exc)})
+                    return
+                self._send_json(200, station.radio_dict())
+                return
+            if path != "/api/active-tx":
+                self._send_json(404, {"error": "not found"})
+                return
+            try:
                 name = str(body["name"])
-            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            except (KeyError, TypeError) as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
             try:

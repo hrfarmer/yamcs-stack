@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -16,6 +17,22 @@ from proves_gs.client import (
     select_satellite_for_tc,
 )
 from proves_gs.config import ConfigError, apply_overrides, load_config
+from proves_gs.radio import (
+    FW_PACKET_COMMAND,
+    GRC_BANDWIDTH_ENUM,
+    GRC_CODING_RATE_ENUM,
+    GRC_DEFAULT_OPCODES,
+    RADIO_CIRCUITPYTHON,
+    SPACE_PACKET_HEADER_SIZE,
+    SPACE_PACKET_TYPE_TC,
+    RadioController,
+    RadioError,
+    encode_circuitpython_settings,
+    encode_fprime_ccsds_command,
+    encode_grc_settings,
+    load_grc_opcodes,
+    validate_radio_settings,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "proves"
 
@@ -168,6 +185,158 @@ def test_load_config_rejects_unknown_keys(tmp_path):
     )
     with pytest.raises(ConfigError, match="unknown config keys"):
         load_config(config_path)
+
+
+def test_load_config_accepts_dual_uart_and_radio_type(tmp_path):
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    config_path = tmp_path / "gs.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'mode = "serial"',
+                'station_name = "gs-lab"',
+                'uart_data_device = "/dev/ttyACM1"',
+                'uart_control_device = "/dev/ttyACM0"',
+                'radio_type = "circuit-python-passthrough"',
+                "[[satellite]]",
+                'name = "proves-flight"',
+                'input_dir = "inputs"',
+                "skip_auth = true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    assert config.uart_device == "/dev/ttyACM1"
+    assert config.uart_control_device == "/dev/ttyACM0"
+    assert config.radio_type == "circuit-python-passthrough"
+
+
+def test_load_config_requires_control_port_for_radio(tmp_path):
+    config_path = tmp_path / "gs.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                'mode = "serial"',
+                'station_name = "gs-lab"',
+                'uart_device = "/dev/ttyACM0"',
+                'radio_type = "grc"',
+                "[[satellite]]",
+                'name = "a"',
+                'input_dir = "."',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="uart_control_device"):
+        load_config(config_path)
+
+
+def test_circuitpython_settings_are_console_tokens():
+    assert encode_circuitpython_settings({"mode": "2"}) == b"2\n"
+    with pytest.raises(RadioError, match="mode"):
+        validate_radio_settings(RADIO_CIRCUITPYTHON, {"mode": "9"})
+
+
+def _parse_grc_tc_command(frame: bytes) -> tuple[int, int, int, int, bytes]:
+    """Return (tc_scid, apid, descriptor, opcode, args) from a GRC uplink frame."""
+    assert crc16_ccitt(frame[:-2]) == int.from_bytes(frame[-2:], "big")
+    tc_scid = int.from_bytes(frame[0:2], "big") & 0x3FF
+    space_packet = frame[5:-2]
+    identification = int.from_bytes(space_packet[0:2], "big")
+    packet_type = (identification >> 12) & 0x1
+    apid = identification & 0x7FF
+    data_length = int.from_bytes(space_packet[4:6], "big") + 1
+    user = space_packet[
+        SPACE_PACKET_HEADER_SIZE : SPACE_PACKET_HEADER_SIZE + data_length
+    ]
+    assert packet_type == SPACE_PACKET_TYPE_TC
+    assert len(user) == data_length
+    descriptor = int.from_bytes(user[0:2], "big")
+    opcode = int.from_bytes(user[2:6], "big")
+    return tc_scid, apid, descriptor, opcode, user[6:]
+
+
+def test_grc_frames_are_space_packets_with_params_before_set_freq():
+    frequency = 437_425_000
+    frames = encode_grc_settings(
+        {
+            "frequency_hz": frequency,
+            "spreading_factor": 7,
+            "bandwidth_tx_khz": 500,
+            "bandwidth_rx_khz": 125,
+            "coding_rate": 6,
+        },
+        scid=0x44,
+        vcid=1,
+    )
+    assert len(frames) == 5
+    parsed = [_parse_grc_tc_command(frame) for frame in frames]
+    assert [item[3] for item in parsed] == [
+        GRC_DEFAULT_OPCODES["DATA_RATE_PRM_SET"],
+        GRC_DEFAULT_OPCODES["BANDWIDTH_TX_PRM_SET"],
+        GRC_DEFAULT_OPCODES["BANDWIDTH_RX_PRM_SET"],
+        GRC_DEFAULT_OPCODES["CODING_RATE_PRM_SET"],
+        GRC_DEFAULT_OPCODES["SET_FREQ"],
+    ]
+    assert parsed[-1][4] == frequency.to_bytes(4, "big")
+    assert parsed[0][4] == bytes([7])
+    assert parsed[1][4] == bytes([GRC_BANDWIDTH_ENUM[500]])
+    assert parsed[2][4] == bytes([GRC_BANDWIDTH_ENUM[125]])
+    assert parsed[3][4] == bytes([GRC_CODING_RATE_ENUM[6]])
+    for tc_scid, apid, descriptor, _opcode, _args in parsed:
+        assert tc_scid == 0x44
+        assert apid == FW_PACKET_COMMAND
+        assert descriptor == FW_PACKET_COMMAND
+    assert b"\x5a\x5a\x5a\x5a" not in b"".join(frames)
+
+
+def test_grc_opcode_lookup_from_dictionary(tmp_path):
+    dictionary = tmp_path / "dict.json"
+    dictionary.write_text(
+        json.dumps(
+            {
+                "commands": [
+                    {
+                        "name": "ReferenceDeployment.uhf.SET_FREQ",
+                        "opcode": 42,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert load_grc_opcodes(dictionary)["SET_FREQ"] == 42
+
+
+def test_radio_controller_writes_circuitpython_mode():
+    port = MagicMock()
+    radio = RadioController(RADIO_CIRCUITPYTHON, port)
+    applied = radio.apply({"mode": "U"})
+    port.write.assert_called_once_with(b"U\n")
+    assert applied == {"mode": "U"}
+    assert radio.status()["type"] == RADIO_CIRCUITPYTHON
+
+
+def test_encode_fprime_ccsds_command_is_crc_valid_tc():
+    args = (437_400_000).to_bytes(4, "big")
+    frame = encode_fprime_ccsds_command(
+        0x10017009,
+        args,
+        scid=0x44,
+        vcid=1,
+        sequence_count=0,
+    )
+    tc_scid, apid, descriptor, opcode, decoded_args = _parse_grc_tc_command(frame)
+    assert tc_scid == 0x44
+    assert apid == FW_PACKET_COMMAND
+    assert descriptor == FW_PACKET_COMMAND
+    assert opcode == 0x10017009
+    assert decoded_args == args
 
 
 def test_authentication_known_vector_and_persistent_sequence(tmp_path):

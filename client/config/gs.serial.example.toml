@@ -7,8 +7,17 @@ mode = "serial"
 server_host = "127.0.0.1"
 station_name = "gs-lab"
 
-uart_device = "/dev/ttyUSB0"
+# Data port carries CCSDS TM/TC. Control port configures the radio.
+# CircuitPython: first USB CDC is console (control), second is data.
+# GRC: -if00 is control, -if02 is data (prefer /dev/serial/by-id/...).
+uart_device = "/dev/ttyACM1"
+uart_control_device = "/dev/ttyACM0"
 uart_baud = 115200
+
+# radio_type = "circuitpython"   # proves-core-reference circuit-python-passthrough
+# radio_type = "grc"             # ground-radio-controller
+# radio_scid = 68                # GRC ComCfg.SpacecraftId (default 0x44)
+# radio_dictionary = "inputs/grc/fprime-dictionary.json"  # optional opcode lookup
 
 # server_tm_port = 51000
 # tc_listen_host = "0.0.0.0"
